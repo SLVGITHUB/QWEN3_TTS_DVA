@@ -10,8 +10,9 @@ Qwen-TTS Nodes for ComfyUI
 
 
 
-1\. Скопируйте папку `qwen_tts_comfy` в `ComfyUI/custom_nodes/`
+1\. Скопируйте папку `qwen_tts_comfy` в `ComfyUI/custom_nodes/` или через git clone
 
 2\. Установите зависимости:   pip install qwen-tts soundfile
+
 
 
