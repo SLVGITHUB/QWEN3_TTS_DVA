@@ -58,3 +58,31 @@ VoiceDesign — синтез по текстовому описанию голо
 Можно задать веса вручную и включить нормализацию суммы весов до 1.0.
 
 
+
+
+
+Qwen-TTS Nodes for ComfyUI
+
+Nodes for integrating Qwen3-TTS into ComfyUI with support for emotions and voice cloning.
+
+## 🚀 Installation
+
+1.Copy the qwen_tts_comfy folder to ComfyUI/custom_nodes/ or via git clone
+
+2.Install dependencies: pip install qwen-tts soundfile or via requirements.txt
+
+📦 DVA 🤖 Qwen TTS Loader Loads the Qwen-TTS speech synthesis model into memory.Supports models:
+
+Base - for voice cloning,CustomVoice - controlled synthesis by speaker name (for example,Vivian),VoiceDesign - synthesis based on a text description of a voice.Allows you to select accuracy (fp16,bf16,fp32),device (cuda/cpu) and attention type.
+
+🎤 DVA 🎤 Qwen TTS Generate Generates speech from text without reference audio.Works only with CustomVoice or VoiceDesign models.Supports: language selection (Russian,English, etc.),emotion control through presets (neutral,joyfullysad, etc.d.),manual temperature setting,top-p and other parameters.For CustomVoice, you can specify the name of the speaker (for example,Vivian).
+
+🎭 DVA 🎭 Qwen TTS Voice Clone Clones a voice from a reference audio file.Works only with -Base type models.Requires: audio input (reference),text,spoken in this audio (ref_text),new text for synthesis.Ideal for recreating a unique voice.
+
+📚 DVA 📚 Qwen TTS Batch Generate Generates multiple audio files in one run.Splits input text at the specified delimiter (for example,|) and synthesizes each part separately.Useful for creating
+
+
+
+
+
+
