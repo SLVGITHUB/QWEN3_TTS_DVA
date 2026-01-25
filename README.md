@@ -57,6 +57,9 @@ VoiceDesign — синтез по текстовому описанию голо
 Например: 70% «спокойного» + 30% «энергичного» голоса.
 Можно задать веса вручную и включить нормализацию суммы весов до 1.0.
 
+Дополнительная информация: https://github.com/QwenLM/Qwen3-TTS?tab=readme-ov-file
+
+https://huggingface.co/collections/Qwen/qwen3-tts
 
 
 
@@ -80,6 +83,11 @@ Base - for voice cloning,CustomVoice - controlled synthesis by speaker name (for
 🎭 DVA 🎭 Qwen TTS Voice Clone Clones a voice from a reference audio file.Works only with -Base type models.Requires: audio input (reference),text,spoken in this audio (ref_text),new text for synthesis.Ideal for recreating a unique voice.
 
 📚 DVA 📚 Qwen TTS Batch Generate Generates multiple audio files in one run.Splits input text at the specified delimiter (for example,|) and synthesizes each part separately.Useful for creating
+
+https://github.com/QwenLM/Qwen3-TTS?tab=readme-ov-file
+
+https://huggingface.co/collections/Qwen/qwen3-tts
+
 
 
 
