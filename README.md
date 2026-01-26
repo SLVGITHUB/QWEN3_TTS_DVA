@@ -6,14 +6,19 @@ Qwen-TTS Nodes for ComfyUI
 
 
 
-\## 🚀 Установка
+🚀 Установка
 
+установка в каталог COMFY: /custom_node 
 
+1. Скопируйте папку `qwen_tts_comfy` в `ComfyUI/custom_nodes/` или через git clone
+2. Установите зависимости:   pip install qwen-tts soundfile openai-whisper faster_whisper
+   или через requirements.txt
 
-1\. Скопируйте папку `qwen_tts_comfy` в `ComfyUI/custom_nodes/` или через git clone
+установка через Менеджер Comfy
 
-2\. Установите зависимости:   pip install qwen-tts soundfile или через requirements.txt
-
+1. Откройте Менеджер -> Custom Nodes Install -> Install via Git URL
+2. Введите строку: https://github.com/SLVGITHUB/QWEN3_TTS_DVA
+3. Перезагрузите COMFY
 
 📦 DVA 🤖 Qwen TTS Loader
 Загружает модель синтеза речи Qwen-TTS в память.
@@ -70,9 +75,18 @@ Nodes for integrating Qwen3-TTS into ComfyUI with support for emotions and voice
 
 ## 🚀 Installation
 
-1.Copy the qwen_tts_comfy folder to ComfyUI/custom_nodes/ or via git clone
+installation in the COMFY directory: /custom_node 
 
+1.Copy the `qwen_tts_comfy` folder to `ComfyUI/custom_nodes/` or via git clone
 2.Install dependencies: pip install qwen-tts soundfile or via requirements.txt
+
+installation via Comfy Manager
+
+1.Open Manager -> Custom Nodes Install -> Install via Git URL
+2.Enter the line: https://github.com/SLVGITHUB/QWEN3_TTS_DVA
+3.Restart COMFY
+
+Description Nodes:
 
 📦 DVA 🤖 Qwen TTS Loader Loads the Qwen-TTS speech synthesis model into memory.Supports models:
 
@@ -87,6 +101,7 @@ Base - for voice cloning,CustomVoice - controlled synthesis by speaker name (for
 https://github.com/QwenLM/Qwen3-TTS?tab=readme-ov-file
 
 https://huggingface.co/collections/Qwen/qwen3-tts
+
 
 
 
