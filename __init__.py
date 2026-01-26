@@ -1,7 +1,3 @@
-# __init__.py
-
-# === ComfyUI-Manager metadata ===
-# This allows the node to appear in ComfyUI Manager with description and author info
 NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
 
@@ -16,4 +12,5 @@ except ImportError:
     pass
 else:
     from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
+
     __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
