@@ -2,10 +2,6 @@ __version__ = "1.0.0"
 __author__ = "DVA"
 __description__ = "DVA_Qwen3_TTS"
 
-# Инициализируем пустыми значениями по умолчанию
-NODE_CLASS_MAPPINGS = {}
-NODE_DISPLAY_NAME_MAPPINGS = {}
-
 # Пытаемся импортировать ноды только если ComfyUI доступен
 try:
     import comfy.utils
@@ -23,4 +19,5 @@ else:
     NODE_DISPLAY_NAME_MAPPINGS.update(imported_display_names)
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "__version__", "__author__"]
+
 
