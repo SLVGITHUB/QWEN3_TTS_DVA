@@ -1,6 +1,6 @@
-# 🎤 Qwen-TTS Nodes for ComfyUI
-
 <div align="center">
+
+# 🎤 Qwen-TTS Nodes for ComfyUI
 
 ![Qwen-TTS Banner](https://img.shields.io/badge/Qwen3--TTS-Advanced%20TTS%20System-blue)
 ![ComfyUI Compatible](https://img.shields.io/badge/ComfyUI-Custom%20Nodes-green)
@@ -303,6 +303,7 @@ QWEN3_TTS_DVA/
 ⭐ Если вам нравится этот проект, поставьте звезду на GitHub!
 
 </div>
+
 
 
 
