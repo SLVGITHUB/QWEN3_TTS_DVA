@@ -1,4 +1,5 @@
 import os
+import shutil  # Добавлен импорт shutil для очистки директории
 import torch
 import numpy as np
 import folder_paths
@@ -437,6 +438,7 @@ class QwenTTSAudioSaver:
             "optional": {
                 "output_dir": ("STRING", {"default": "output/tts", "multiline": False}),
                 "metadata": ("STRING", {"default": "", "multiline": True}),
+                "clear_output_dir": (["no", "yes"], {"default": "no"}),
             }
         }
     
@@ -445,16 +447,39 @@ class QwenTTSAudioSaver:
     FUNCTION = "save_audio"
     CATEGORY = "audio/tts"
     
-    def save_audio(self, audio, filename, sample_rate, output_dir="output/tts", metadata=""):
+    def save_audio(self, audio, filename, sample_rate, output_dir="output/tts", 
+                   metadata="", clear_output_dir="no"):
+        
+        # Получаем полный путь к директории
         full_output_dir = os.path.join(folder_paths.get_output_directory(), output_dir)
+        
+        # Очищаем директорию, если выбрано "yes"
+        if clear_output_dir == "yes" and os.path.exists(full_output_dir):
+            try:
+                print(f"🧹 Очистка директории: {full_output_dir}")
+                for filename in os.listdir(full_output_dir):
+                    file_path = os.path.join(full_output_dir, filename)
+                    try:
+                        if os.path.isfile(file_path) or os.path.islink(file_path):
+                            os.unlink(file_path)
+                        elif os.path.isdir(file_path):
+                            shutil.rmtree(file_path)
+                    except Exception as e:
+                        print(f"⚠️ Не удалось удалить {file_path}: {e}")
+            except Exception as e:
+                print(f"⚠️ Ошибка при очистке директории: {e}")
+        
+        # Создаем директорию
         os.makedirs(full_output_dir, exist_ok=True)
         
+        # Обрабатываем имя файла
         safe_filename = "".join(c for c in filename if c.isalnum() or c in (' ', '.', '_', '-')).rstrip()
         if not safe_filename.endswith('.wav'):
             safe_filename += '.wav'
         
         filepath = os.path.join(full_output_dir, safe_filename)
         
+        # Сохраняем аудио
         if isinstance(audio, dict) and "waveform" in audio:
             audio_np = audio["waveform"].cpu().numpy().squeeze()
         else:
@@ -462,11 +487,16 @@ class QwenTTSAudioSaver:
         
         sf.write(filepath, audio_np, sample_rate)
         
+        # Сохраняем метаданные
         if metadata.strip():
             metadata_file = filepath.replace('.wav', '.json')
             try:
                 meta_dict = json.loads(metadata) if isinstance(metadata, str) else metadata
-                meta_dict.update({"save_time": time.strftime("%Y-%m-%d %H:%M:%S")})
+                meta_dict.update({
+                    "save_time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "output_dir": output_dir,
+                    "cleared_before_save": clear_output_dir == "yes"
+                })
                 with open(metadata_file, 'w', encoding='utf-8') as f:
                     json.dump(meta_dict, f, indent=2, ensure_ascii=False)
             except Exception as e:
