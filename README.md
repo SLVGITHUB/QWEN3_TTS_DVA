@@ -10,7 +10,7 @@
 
   [![Python Version](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/)
   [![PyTorch](https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?logo=PyTorch&logoColor=white)](https://pytorch.org/)
-  [![Hugging Face](https://img.shields.io/badge/Hugging%20Face-Models-yellow)](https://huggingface.co/Qwen)
+  [![Hugging Face](https://img.shields.io/badge/Hugging%20Face-Models=yellow)](https://huggingface.co/Qwen)
 
 </div>
 
@@ -303,6 +303,7 @@ QWEN3_TTS_DVA/
 ⭐ Если вам нравится этот проект, поставьте звезду на GitHub!
 
 </div>
+
 
 
 
