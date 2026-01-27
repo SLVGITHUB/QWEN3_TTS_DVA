@@ -1,4 +1,4 @@
-__version__ = "1.0.0"
+__version__ = "1.0.5"
 __author__ = "DVA"
 __description__ = "DVA_Qwen3_TTS"
 
@@ -19,5 +19,6 @@ else:
     NODE_DISPLAY_NAME_MAPPINGS.update(imported_display_names)
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "__version__", "__author__"]
+
 
 
