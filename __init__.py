@@ -1,6 +1,6 @@
 __version__ = "1.0.0"
 __author__ = "DVA"
-__description__ = "DVA Qwen-TTS: High-quality multilingual text-to-speech with voice cloning and emotion control."
+__description__ = "DVA_Qwen3_TTS"
 
 # Инициализируем пустыми значениями по умолчанию
 NODE_CLASS_MAPPINGS = {}
@@ -23,3 +23,4 @@ else:
     NODE_DISPLAY_NAME_MAPPINGS.update(imported_display_names)
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "__version__", "__author__"]
+
