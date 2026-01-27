@@ -48,10 +48,6 @@
 
 ### Метод 1: Через ComfyUI Manager (рекомендуется)
 
-<div align="center">
-  <img src="https://raw.githubusercontent.com/SLVGITHUB/QWEN3_TTS_DVA/main/images/installation.png" alt="Установка через ComfyUI Manager" width="600"/>
-</div>
-
 1. Откройте **ComfyUI Manager**
 2. Перейдите в **Custom Nodes Install** → **Install via Git URL**
 3. Введите URL: `https://github.com/SLVGITHUB/QWEN3_TTS_DVA`
@@ -197,6 +193,10 @@ graph TD
     H[Несколько эмоций] --> I[Qwen TTS Emotion Mixer]
     I --> C
 ```
+<div align="center">
+  <img src="https://raw.githubusercontent.com/SLVGITHUB/QWEN3_TTS_DVA/main/images/workflow.png" alt="workflow" width="400"/>
+</div>
+
 
 **Типичный сценарий использования:**
 1. Загрузите модель через **Qwen TTS Loader**
@@ -303,3 +303,4 @@ QWEN3_TTS_DVA/
 ⭐ Если вам нравится этот проект, поставьте звезду на GitHub!
 
 </div>
+
