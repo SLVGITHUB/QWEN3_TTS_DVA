@@ -24,7 +24,7 @@
 - [🎨 Example Workflow](#-example-workflow)
 - [🔧 Model parameters](#-model-parameters)
 - [📁 Project structure](#-project-structure)
-- [❓ Frequently asked questions](#-frequently asked questions)
+- [❓ Frequently asked questions](#-frequently-asked-questions)
 - [📄 License](#-license)
 
 ---
@@ -303,6 +303,7 @@ Welcome:
 ⭐ If you like this project, put a star on GitHub!
 
 </div>
+
 
 
 
