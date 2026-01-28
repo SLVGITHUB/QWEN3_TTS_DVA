@@ -6,303 +6,304 @@
 ![ComfyUI Compatible](https://img.shields.io/badge/ComfyUI-Custom%20Nodes-green)
 ![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)
   
-  **Ноды для интеграции Qwen3-TTS в ComfyUI с поддержкой эмоций и клонирования голоса**
+  **Nodes to integrate Qwen3-TTS into ComfyUI with emotion support and voice cloning**
 
-  [![Python Version](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/)
-  [![PyTorch](https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?logo=PyTorch&logoColor=white)](https://pytorch.org/)
-  [![Hugging Face](https://img.shields.io/badge/Hugging%20Face-Models-yellow)](https://huggingface.co/Qwen)
+  [! [Python Version](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/)
+  [! [PyTorch](https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?logo=PyTorch&logoColor=white)](https://pytorch.org/)
+  [! [Hugging Face](https://img.shields.io/badge/Hugging%20Face-Models-yellow)](https://huggingface.co/Qwen)
 
 </div>
 
 ---
 
-## 📋 Оглавление
+## 📋 Summary
 
-- [✨ Особенности](#-особенности)
-- [🚀 Установка](#-установка)
-- [🎯 Ноды](#-ноды)
-- [🎨 Пример Workflow](#-пример-workflow)
-- [🔧 Параметры моделей](#-параметры-моделей)
-- [📁 Структура проекта](#-структура-проекта)
-- [❓ Частые вопросы](#-частые-вопросы)
-- [📄 Лицензия](#-лицензия)
+- [✨ Features](#-Features)
+- [🚀 Install](#-install)
+- [🎯 Nodes](#-nodes)
+- [🎨 Example Workflow](#-example-workflow)
+- [🔧 Model parameters](#-model-parameters)
+- [📁 Project structure](#-project-structure)
+- [❓ Frequently asked questions](#-frequently asked questions)
+- [📄 License](#-license)
 
 ---
 
-## ✨ Особенности
+## ✨ Features
 
 <div align="center">
-  <img src="https://raw.githubusercontent.com/SLVGITHUB/QWEN3_TTS_DVA/main/images/features.png" alt="Особенности Qwen-TTS" width="800"/>
+  <img src="https://raw.githubusercontent.com/SLVGITHUB/QWEN3_TTS_DVA/main/images/features.png" alt="Qwen-TTS" width="800"/>
 </div>
 
-- 🎭 **Поддержка эмоций** - синтез речи с различными эмоциональными окрасками
-- 🎤 **Клонирование голоса** - создание голосовых двойков из эталонных аудио
-- 🌍 **Многоязычность** - поддержка русского, английского и других языков
-- ⚡ **Высокая производительность** - оптимизация для CUDA и CPU
-- 🎨 **Гибкая настройка** - тонкая регулировка параметров синтеза
-- 🔄 **Пакетная обработка** - массовая генерация аудиофайлов
+- 🎭 **Support of emotions** - synthesis of speech with different emotional colors
+- 🎤 **Voice cloning** - creation of voice duets from reference audio
+- 🌍 **Multilingual** - support for Russian, English and other languages
+- ⚡ **High performance** - optimization for CUDA and CPU
+- 🎨 **Flexible setting** - fine adjustment of synthesis parameters
+- 🔄 **Batch processing** - mass audio file generation
 
 ---
 
-## 🚀 Установка
+## 🚀 Installation
 
-### Метод 1: Через ComfyUI Manager (рекомендуется)
+### Method 1: Through ComfyUI Manager (recommended)
 
-1. Откройте **ComfyUI Manager**
-2. Перейдите в **Custom Nodes Install** → **Install via Git URL**
-3. Введите URL: `https://github.com/SLVGITHUB/QWEN3_TTS_DVA`
-4. Нажмите **Install**
-5. Перезапустите ComfyUI
+1. Open **ComfyUI Manager**
+2. Go to **Custom Nodes Install**   **Install via Git URL**
+3. Enter the URL: https://github.com/SLVGITHUB/QWEN3_TTS_DVA
+4. Press **Install**
+5. Restart the ComfyUI
 
-### Метод 2: Ручная установка
+### Method 2: Manual Installation
 
-```bash
-# Клонируйте репозиторий в каталог custom_nodes
+`bash
+# Clone repository to custom_nodes directory
 cd ComfyUI/custom_nodes
 git clone https://github.com/SLVGITHUB/QWEN3_TTS_DVA.git
 
-# Установите зависимости
+# Set dependencies
 pip install -r requirements.txt
-# Или установите вручную
+# Or set manually
 pip install qwen-tts soundfile openai-whisper faster_whisper
-```
+`
 
-### Требования
+### Requirements
 
 - Python 3.8+
-- ComfyUI последней версии
+- ComfyUI latest version
 - PyTorch 2.0+
-- Видеокарта с поддержкой CUDA (рекомендуется) или CPU
+- Video card with CUDA support (recommended) or CPU
 
 ---
 
-## 🎯 Ноды
+## 🎯 Nodes
 
 ### 📦 Qwen TTS Loader
-**Загружает модель синтеза речи Qwen-TTS в память**
+**Downloads Qwen-TTS speech model to memory**
 
 <div align="center">
-  <img src="https://raw.githubusercontent.com/SLVGITHUB/QWEN3_TTS_DVA/main/images/model_loader.png" alt="Загрузчик моделей" width="400"/>
+  <img src="https://raw.githubusercontent.com/SLVGITHUB/QWEN3_TTS_DVA/main/images/model_loader.png" alt="Model Loader" width="400"/>
 </div>
 
-**Поддерживаемые модели:**
-- `Qwen3-TTS-Base` - для клонирования голоса
-- `Qwen3-TTS-CustomVoice` - синтез по имени спикера
-- `Qwen3-TTS-VoiceDesign` - синтез по текстовому описанию
+**Supported models:**
+- «Qwen3-TTS-Base`- for voice cloning
+- «Qwen3-TTS-CustomVoice» - a synthesis called speaker
+- «Qwen3-TTS-VoiceDesign» - text description synthesis
 
-**Параметры:**
-- **Точность вычислений**: fp16, bf16, fp32
-- **Устройство**: CUDA, CPU
-- **Тип внимания**: стандартный, оптимизированный
+**Parameters:**
+- **Calculation accuracy**: fp16, bf16, fp32
+- **Device**: CUDA, CPU
+-**Type of attention**: standard, optimized
 
 ---
 
 ### 🎤 Qwen TTS Generate
-**Генерирует речь из текста без референсного аудио**
+**Generates speech from text without reference audio**
 
 <div align="center">
-  <img src="https://raw.githubusercontent.com/SLVGITHUB/QWEN3_TTS_DVA/main/images/text_to_speech.png" alt="Генерация речи" width="400"/>
+  <img src="https://raw.githubusercontent.com/SLVGITHUB/QWEN3_TTS_DVA/main/images/text_to_speech.png" alt="Speech Generation" width="400"/>
 </div>
 
-**Особенности:**
-- Поддержка языков: русский, английский, китайский, японский и другие
-- Эмоциональные пресеты: нейтральный, радостный, грустный, злой, испуганный
-- Расширенные параметры: температура, top-p, длина сэмпла
-- Для CustomVoice: указание имени спикера (например, "Vivian", "Alex", "Maya")
+**Features:**
+- Support languages: Russian, English, Chinese, Japanese and others
+- Emotional presets: neutral, cheerful, sad, angry, scared
+- Extended parameters: temperature, top-p, sample length
+- For CustomVoice: specifying the speaker’s name (e.g., "Vivian", "Alex", "Maya")
 
 ---
 
 ### 🎭 Qwen TTS Voice Clone
-**Клонирует голос из референсного аудиофайла**
+**Clones voice from reference audio file**
 
 <div align="center">
-  <img src="https://raw.githubusercontent.com/SLVGITHUB/QWEN3_TTS_DVA/main/images/voice_cloning.png" alt="Клонирование голоса" width="400"/>
+  <img src="https://raw.githubusercontent.com/SLVGITHUB/QWEN3_TTS_DVA/main/images/voice_cloning.png" alt="Voice cloning" width="400"/>
 </div>
 
-**Требования:**
-- Входное аудио (референс) - WAV, MP3, FLAC
-- Текст, произнесённый в аудио (ref_text)
-- Новый текст для синтеза
+**Requirements:**
+- Input audio (reference) - WAV, MP3, FLAC
+- Audio text (ref_text)
+- New text for synthesis
 
-**Идеально для:**
-- Создания голосовых двойков
-- Озвучки контента уникальным голосом
-- Воссоздания исторических речей
+**Perfect for:**
+- Voice doubling
+- Voice-overs of content with a unique voice
+- Remaking of historical speeches
 
 ---
 
 ### 📚 Qwen TTS Batch Generate
-**Генерирует несколько аудиофайлов за один запуск**
+**Generates multiple audio files per run**
 
 <div align="center">
-  <img src="https://raw.githubusercontent.com/SLVGITHUB/QWEN3_TTS_DVA/main/images/batch_generation.png" alt="Пакетная генерация" width="400"/>
+  <img src="https://raw.githubusercontent.com/SLVGITHUB/QWEN3_TTS_DVA/main/images/batch_generation.png" alt="Batch generation" width="400"/>
 </div>
 
-**Функционал:**
-- Разделение текста по указанному разделителю (по умолчанию "|")
-- Параллельная или последовательная обработка
-- Автоматическая нумерация файлов
-- Поддержка разных параметров для каждого сегмента
+**Functional:**
+- Split text by specified separator (default is "|")
+- Parallel or sequential processing
+- Automatic file numbering
+- Support of different parameters for each segment
 
 ---
 
 ### 💾 Qwen TTS Audio Saver
-**Сохраняет сгенерированное аудио на диск**
+**Saves generated audio to disk**
 
 <div align="center">
-  <img src="https://raw.githubusercontent.com/SLVGITHUB/QWEN3_TTS_DVA/main/images/audio_saver.png" alt="Сохранение аудио" width="400"/>
+  <img src="https://raw.githubusercontent.com/SLVGITHUB/QWEN3_TTS_DVA/main/images/audio_saver.png" alt="Save audio" width="400"/>
 </div>
 
-**Параметры сохранения:**
-- Формат: WAV (16-bit, 24kHz)
-- Папка назначения: `ComfyUI/output/tts/`
-- Автоматическое удаление файла
-- Метаданные в JSON формате
-- Перезапись или инкрементальное сохранение
+**Save settings:**
+- Format: WAV (16-bit, 24kHz)
+- Destination folder: «ComfyUI/output/tts/
+- Automatic file deletion
+- Metadata in JSON format
+- Overwrite or incremental save
 
 ---
 
 ### 🔀 Qwen TTS Emotion Mixer
-**Смешивает варианты с разными эмоциями**
+**Mixes options with different emotions**
 
 <div align="center">
-  <img src="https://raw.githubusercontent.com/SLVGITHUB/QWEN3_TTS_DVA/main/images/emotion_mixer.png" alt="Смешивание эмоций" width="400"/>
+  <img src="https://raw.githubusercontent.com/SLVGITHUB/QWEN3_TTS_DVA/main/images/emotion_mixer.png" alt="Mixing emotions" width="400"/>
 </div>
 
-**Применение:**
-- Создание сложных эмоциональных переходов
-- Смешивание 70% "спокойного" + 30% "энергичного"
-- Корректировка весов в реальном времени
-- Нормализация суммы весов до 1.0
+**Application:**
+- Creating complex emotional transitions
+- Mixing 70% "calm" + 30% "energetic"
+- Real-time adjustment of weights
+- Normalization of the sum of weights up to 1.0
 
 ---
 
-## 🎨 Пример Workflow
+## 🎨 Example Workflow
 
-```mermaid
+`mermaid
 graph TD
     A[Qwen TTS Loader] --> B[Qwen TTS Generate]
     B --> C[Qwen TTS Audio Saver]
     
-    D[Загрузка аудио] --> E[Qwen TTS Voice Clone]
+    D[Audio load] --> E[Qwen TTS Voice Clone]
     E --> C
     
-    F[Текст с разделителями] --> G[Qwen TTS Batch Generate]
+    F[Text with separators] --> G[Qwen TTS Batch Generate]
     G --> C
     
-    H[Несколько эмоций] --> I[Qwen TTS Emotion Mixer]
+    H[Some emotions] --> I[Qwen TTS Emotion Mixer]
     I --> C
-```
+`
 <div align="center">
   <img src="https://raw.githubusercontent.com/SLVGITHUB/QWEN3_TTS_DVA/main/images/workflow.png" alt="workflow" width="400"/>
 </div>
 
 
-**Типичный сценарий использования:**
-1. Загрузите модель через **Qwen TTS Loader**
-2. Сгенерируйте речь через **Qwen TTS Generate**
-3. Настройте параметры сохранения в **Qwen TTS Audio Saver**
-4. Запустите workflow
+**Typical use case:**
+1. Upload the model via **Qwen TTS Loader**
+2. Generate speech via **Qwen TTS Generate**
+3. Set the save settings to **Qwen TTS Audio Saver**
+4. Start workflow
 
 ---
 
-## 🔧 Параметры моделей
+## 🔧 Model Parameters
 
-### Рекомендуемые настройки
+### Recommended settings
 
-| Параметр | Qwen3-TTS-Base | Qwen3-TTS-CustomVoice | Qwen3-TTS-VoiceDesign |
-|----------|----------------|------------------------|------------------------|
-| Температура | 0.6-0.8 | 0.7-0.9 | 0.7-0.9 |
+| Parameter | Qwen3-TTS-Base | Qwen3-TTS-CustomVoice | Qwen3-TTS-VoiceDesign |
+|--------|_____________|_______|
+| Temperature | 0.6-0.8 | 0.7-0.9 | 0.7-0.9 |
 | Top-P | 0.8-0.95 | 0.85-0.98 | 0.85-0.98 |
-| Длина сэмпла | 2048 | 1024 | 1024 |
+| Sample length | 2048 | 1024 | 1024 |
 
-### Поддерживаемые языки
+### Supported languages
 
-- 🇷🇺 Русский (ru)
-- 🇺🇸 Английский (en)
-- 🇨🇳 Китайский (zh)
-- 🇯🇵 Японский (ja)
-- 🇰🇷 Корейский (ko)
-- 🇫🇷 Французский (fr)
-- 🇩🇪 Немецкий (de)
-- 🇪🇸 Испанский (es)
+- 🇷🇺 Russian (ru)
+- 🇺🇸 English (en)
+- 🇨🇳 Chinese (zh)
+- 🇯🇵 Japanese (ja)
+- 🇰🇷 Korean (ko)
+- 🇫🇷 French (fr)
+- 🇩🇪 German (de)
+- 🇪🇸 Spanish (es)
 
 ---
 
-## 📁 Структура проекта
+## 📁 Project structure
 
-```
+`
 QWEN3_TTS_DVA/
-├── qwen_tts_comfy/
-│   ├── nodes.py              # Основные ноды ComfyUI
-│   ├── __init__.py
-│   ├── requirements.txt      # Зависимости Python
-│   └── README.md
-├── examples/
-│   ├── workflows/
-│   └── audio_samples/
-├── images/                   # Изображения для документации
-└── LICENSE
-```
+qwen_tts_comfy/
+nodes.py   # Basic ComfyUI Nodes
+__init__.py
+requirements.txt   # Python dependencies
+README.md
+examples/
+workflows/
+audio_samples/
+images/   # Images for documentation
+License
+`
 
 ---
 
-## ❓ Частые вопросы
+## ❓ Frequently asked questions
 
-### ❓ Какую модель выбрать?
-- Для клонирования голоса: **Qwen3-TTS-Base**
-- Для готовых голосов: **Qwen3-TTS-CustomVoice**
-- Для создания уникальных голосов: **Qwen3-TTS-VoiceDesign**
+### ❓ Which model to choose?
+- For voice cloning: **Qwen3-TTS-Base**
+- For ready voices: **Qwen3-TTS-CustomVoice**
+- To create unique voices: **Qwen3-TTS-VoiceDesign**
 
-### ❓ Почему медленно работает на CPU?
-Модели TTS требуют значительных вычислительных ресурсов. Рекомендуется использовать GPU с поддержкой CUDA.
+### ❓ Why does it work slowly on the CPU?
+TTS models require significant computing resources. It is recommended to use a GPU with CUDA support.
 
-### ❓ Как улучшить качество синтеза?
-- Используйте более длинные референсные аудио для клонирования
-- Экспериментируйте с параметрами температуры и top-p
-- Используйте эмоциональные пресеты для выразительности
+### ❓ How to improve synthesis quality?
+- Use longer reference audio for cloning
+- Experiment with temperature parameters and top-p
+- Use emotional presets for expressiveness
 
-### ❓ Поддерживаются ли другие форматы аудио?
-Входные аудио: WAV, MP3, FLAC, OGG
-Выходные аудио: WAV (стандарт), возможно конвертирование через дополнительные ноды
-
----
-
-## 📄 Лицензия
-
-Этот проект распространяется под лицензией MIT. Подробности см. в файле [LICENSE](LICENSE).
+### ❓ Are other audio formats supported?
+Input audio: WAV, MP3, FLAC, OGG
+Audio output: WAV (standard), can be converted through additional nodes
 
 ---
 
-## 🔗 Полезные ссылки
+## 📄 License
+
+This project is distributed under the MIT license. See [LICENSE](LICENSE) for details.
+
+---
+
+## 🔗 Useful links
 
 <div align="center">
 
-[🌐 Официальный репозиторий Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) |
-[🤗 Модели на Hugging Face](https://huggingface.co/collections/Qwen/qwen3-tts) |
-[💬 Обсуждение проблем](https://github.com/SLVGITHUB/QWEN3_TTS_DVA/issues)
+[🌐 Official Qwen3-TTS Repository](https://github.com/QwenLM/Qwen3-TTS) |
+[🤗 Models on Hugging Face](https://huggingface.co/collections/Qwen/qwen3-tts) |
+[💬 Problem Discussion](https://github.com/SLVGITHUB/QWEN3_TTS_DVA/issues)
 
 </div>
 
 ---
 
-## 🤝 Вклад в проект
+## 🤝 Contribution to the project
 
-Приветствуются:
-- Сообщения об ошибках
-- Предложения по улучшению
+Welcome:
+- Error messages
+- Proposals for improvement
 - Pull requests
-- Примеры workflows
+- Sample workflows
 
 ---
 
 <div align="center">
 
-**Создано с ❤️ для сообщества ComfyUI**
+**Created with ❤️ for ComfyUI community**
 
-⭐ Если вам нравится этот проект, поставьте звезду на GitHub!
+⭐ If you like this project, put a star on GitHub!
 
 </div>
+
 
 
 
