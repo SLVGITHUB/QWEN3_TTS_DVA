@@ -179,20 +179,6 @@ pip install qwen-tts soundfile openai-whisper faster_whisper
 
 ## 🎨 Example Workflow
 
-`mermaid
-graph TD
-    A[Qwen TTS Loader] --> B[Qwen TTS Generate]
-    B --> C[Qwen TTS Audio Saver]
-    
-    D[Audio load] --> E[Qwen TTS Voice Clone]
-    E --> C
-    
-    F[Text with separators] --> G[Qwen TTS Batch Generate]
-    G --> C
-    
-    H[Some emotions] --> I[Qwen TTS Emotion Mixer]
-    I --> C
-`
 <div align="center">
   <img src="https://raw.githubusercontent.com/SLVGITHUB/QWEN3_TTS_DVA/main/images/workflow.png" alt="workflow" width="400"/>
 </div>
@@ -270,7 +256,7 @@ Audio output: WAV (standard), can be converted through additional nodes
 
 ## 📄 License
 
-This project is distributed under the MIT license. See [LICENSE](LICENSE) for details.
+This project is distributed under the Apache 2.0. license.
 
 ---
 
@@ -303,6 +289,7 @@ Welcome:
 ⭐ If you like this project, put a star on GitHub!
 
 </div>
+
 
 
 
