@@ -29,6 +29,158 @@ def _detect_model_type(model_name):
         return "base"
 
 
+class PathSanitizer:
+    """Класс для безопасной обработки путей и имен файлов"""
+    
+    @staticmethod
+    def sanitize_path(path: str, allow_absolute: bool = False) -> str:
+        """
+        Очищает путь от path traversal атак и опасных символов
+        
+        Args:
+            path: Исходный путь
+            allow_absolute: Разрешить абсолютные пути (только если они внутри разрешенных директорий)
+        
+        Returns:
+            Очищенный безопасный путь
+        """
+        if not path or not isinstance(path, str):
+            return ""
+        
+        # Удаляем все попытки path traversal
+        cleaned = re.sub(r'\.\./|\.\.\\', '', path)
+        
+        # Заменяем множественные разделители
+        cleaned = re.sub(r'[/\\]{2,}', '/', cleaned)
+        
+        # Убираем опасные символы (разрешаем буквы, цифры, пробел, -_./)
+        safe_chars = set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
+                        '0123456789'
+                        '_-./ \\')
+        cleaned = ''.join(c for c in cleaned if c in safe_chars)
+        
+        # Удаляем ведущие/завершающие пробелы и точки
+        cleaned = cleaned.strip(' .')
+        
+        # Если путь должен быть абсолютным, проверяем его безопасность
+        if allow_absolute and os.path.isabs(cleaned):
+            # Для абсолютных путей проверяем, что они внутри разрешенных директорий
+            allowed_dirs = [
+                folder_paths.get_output_directory(),
+                folder_paths.get_temp_directory(),
+                folder_paths.get_input_directory(),
+                os.path.expanduser("~"),
+            ]
+            
+            # Нормализуем путь
+            cleaned = os.path.normpath(cleaned)
+            
+            # Проверяем, что путь начинается с одной из разрешенных директорий
+            is_safe = False
+            for allowed_dir in allowed_dirs:
+                allowed_norm = os.path.normpath(allowed_dir)
+                if cleaned.startswith(allowed_norm):
+                    is_safe = True
+                    break
+            
+            if not is_safe:
+                # Если путь небезопасный, преобразуем в относительный
+                cleaned = os.path.basename(cleaned)
+        
+        return cleaned
+    
+    @staticmethod
+    def sanitize_filename(filename: str) -> str:
+        """
+        Очищает имя файла от опасных символов и path traversal
+        
+        Args:
+            filename: Исходное имя файла
+        
+        Returns:
+            Очищенное безопасное имя файла
+        """
+        if not filename or not isinstance(filename, str):
+            return "output.wav"
+        
+        # Удаляем path traversal
+        cleaned = re.sub(r'\.\./|\.\.\\', '', filename)
+        
+        # Берем только имя файла (не путь)
+        basename = os.path.basename(cleaned)
+        
+        # Удаляем опасные символы
+        safe_chars = set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
+                        '0123456789'
+                        '_- .')
+        cleaned = ''.join(c for c in basename if c in safe_chars)
+        
+        # Удаляем ведущие/завершающие пробелы и точки
+        cleaned = cleaned.strip(' .')
+        
+        # Ограничиваем длину (максимум 255 символов)
+        if len(cleaned) > 255:
+            name, ext = os.path.splitext(cleaned)
+            cleaned = name[:250] + ext
+        
+        # Если имя файла пустое после очистки
+        if not cleaned:
+            cleaned = "output.wav"
+        
+        return cleaned
+    
+    @staticmethod
+    def ensure_safe_extension(filename: str, default_ext: str = ".wav") -> str:
+        """
+        Убеждается, что у файла безопасное расширение
+        
+        Args:
+            filename: Имя файла
+            default_ext: Расширение по умолчанию
+        
+        Returns:
+            Имя файла с безопасным расширением
+        """
+        if not filename:
+            return f"output{default_ext}"
+        
+        # Получаем расширение
+        name, ext = os.path.splitext(filename)
+        
+        # Разрешенные аудио расширения
+        allowed_extensions = {'.wav', '.mp3', '.ogg', '.flac', '.m4a'}
+        
+        # Если расширение не разрешено или отсутствует, используем default_ext
+        if not ext or ext.lower() not in allowed_extensions:
+            ext = default_ext
+        
+        # Очищаем имя файла
+        safe_name = PathSanitizer.sanitize_filename(name)
+        
+        return safe_name + ext
+    
+    @staticmethod
+    def create_secure_temp_file(suffix: str = ".wav") -> str:
+        """
+        Создает безопасный временный файл
+        
+        Args:
+            suffix: Расширение файла
+        
+        Returns:
+            Путь к временному файлу
+        """
+        # Используем tempfile с явными параметрами безопасности
+        temp_dir = tempfile.gettempdir()
+        safe_suffix = PathSanitizer.sanitize_filename(suffix)
+        
+        # Создаем временный файл с безопасным именем
+        fd, temp_path = tempfile.mkstemp(suffix=safe_suffix, dir=temp_dir)
+        os.close(fd)
+        
+        return temp_path
+
+
 class QwenTTSModelLoader:
     @classmethod
     def INPUT_TYPES(cls):
@@ -79,8 +231,12 @@ class QwenTTSModelLoader:
                 "trust_remote_code": True,
             }
             
-            if cache_dir and os.path.exists(cache_dir):
-                kwargs["cache_dir"] = cache_dir
+            # Безопасная обработка cache_dir
+            if cache_dir and isinstance(cache_dir, str):
+                safe_cache_dir = PathSanitizer.sanitize_path(cache_dir, allow_absolute=True)
+                if safe_cache_dir and os.path.exists(safe_cache_dir):
+                    kwargs["cache_dir"] = safe_cache_dir
+                    print(f"📁 Используется cache_dir: {safe_cache_dir}")
             
             try:
                 kwargs["attn_implementation"] = attention_type
@@ -457,6 +613,9 @@ class QwenTTSVoiceClone:
             "articulation": articulation,
         })
         
+        # Безопасная обработка output_prefix
+        safe_output_prefix = PathSanitizer.sanitize_filename(output_prefix)
+        
         # Глобальная инструкция
         base_instruct = global_instruct.strip()
         
@@ -640,10 +799,9 @@ class QwenTTSVoiceClone:
         # Обрезка до [-1, 1]
         ref_np = np.clip(ref_np, -1.0, 1.0)
 
-        # Сохраняем во временный файл
-        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
-            temp_ref_path = tmp.name
-            sf.write(temp_ref_path, ref_np, ref_sr, subtype='FLOAT')
+        # Используем безопасный метод создания временного файла
+        temp_ref_path = PathSanitizer.create_secure_temp_file('.wav')
+        sf.write(temp_ref_path, ref_np, ref_sr, subtype='FLOAT')
         
         # ВАЖНО: НЕ добавляем инструкцию к тексту!
         # Инструкция передается отдельно в generate_voice_clone
@@ -700,10 +858,12 @@ class QwenTTSVoiceClone:
             wavs, sr = qwen_model.generate_voice_clone(**gen_kwargs)
             generation_time = time.time() - start_time
         
+        # Безопасное удаление временного файла
         try:
-            os.unlink(temp_ref_path)
-        except:
-            pass
+            if os.path.exists(temp_ref_path):
+                os.unlink(temp_ref_path)
+        except Exception as e:
+            print(f"⚠️ Не удалось удалить временный файл {temp_ref_path}: {e}")
         
         audio_data = wavs[0] if isinstance(wavs, list) else wavs
         if torch.is_tensor(audio_data):
@@ -788,6 +948,9 @@ class QwenTTSBatchGenerate:
         print(f"🔄 Пакетная генерация: {len(texts)} текстов")
         print(f"😊 Эмоция: {emotion_preset}")
         
+        # Безопасная обработка output_prefix
+        safe_output_prefix = PathSanitizer.sanitize_filename(output_prefix)
+        
         # Эмоции → instruct
         emotion_to_instruct = {
             "neutral": "",
@@ -824,7 +987,7 @@ class QwenTTSBatchGenerate:
                     emotion_preset=emotion_preset
                 )
                 audio_outputs.append(audio_dict)
-                filename = f"{output_prefix}{i+1:03d}.wav"
+                filename = f"{safe_output_prefix}{i+1:03d}.wav"
                 filenames.append(filename)
                 
             except Exception as e:
@@ -863,59 +1026,151 @@ class QwenTTSAudioSaver:
     def save_audio(self, audio, filename, sample_rate, output_dir="output/tts", 
                    metadata="", clear_output_dir="no"):
         
-        # Получаем полный путь к директории
-        full_output_dir = os.path.join(folder_paths.get_output_directory(), output_dir)
+        # === БЕЗОПАСНАЯ ОБРАБОТКА output_dir ===
+        # 1. Санитаризируем output_dir
+        safe_output_dir = PathSanitizer.sanitize_path(output_dir)
+        if not safe_output_dir:
+            safe_output_dir = "output/tts"
         
-        # Очищаем директорию, если выбрано "yes"
-        if clear_output_dir == "yes" and os.path.exists(full_output_dir):
-            try:
-                print(f"🧹 Очистка директории: {full_output_dir}")
-                for filename in os.listdir(full_output_dir):
-                    file_path = os.path.join(full_output_dir, filename)
-                    try:
-                        if os.path.isfile(file_path) or os.path.islink(file_path):
-                            os.unlink(file_path)
-                        elif os.path.isdir(file_path):
-                            shutil.rmtree(file_path)
-                    except Exception as e:
-                        print(f"⚠️ Не удалось удалить {file_path}: {e}")
-            except Exception as e:
-                print(f"⚠️ Ошибка при очистке директории: {e}")
+        # 2. Получаем базовую директорию вывода из ComfyUI
+        base_output_dir = folder_paths.get_output_directory()
         
-        # Создаем директорию
-        os.makedirs(full_output_dir, exist_ok=True)
+        # 3. Создаем полный путь и нормализуем его
+        full_output_dir = os.path.join(base_output_dir, safe_output_dir)
+        full_output_dir = os.path.normpath(full_output_dir)
         
-        # Обрабатываем имя файла
-        safe_filename = "".join(c for c in filename if c.isalnum() or c in (' ', '.', '_', '-')).rstrip()
-        if not safe_filename.endswith('.wav'):
-            safe_filename += '.wav'
+        # 4. Проверяем, что путь остается внутри разрешенной директории
+        base_output_norm = os.path.normpath(base_output_dir)
+        if not full_output_dir.startswith(base_output_norm):
+            print(f"⚠️ Опасный путь output_dir: {output_dir}, используется стандартный")
+            safe_output_dir = "output/tts"
+            full_output_dir = os.path.join(base_output_dir, safe_output_dir)
+            full_output_dir = os.path.normpath(full_output_dir)
         
+        # === БЕЗОПАСНАЯ ОБРАБОТКА filename ===
+        # 1. Санитаризируем имя файла
+        safe_filename = PathSanitizer.sanitize_filename(filename)
+        
+        # 2. Убеждаемся, что у файла безопасное расширение
+        safe_filename = PathSanitizer.ensure_safe_extension(safe_filename, ".wav")
+        
+        # 3. Формируем полный путь к файлу
         filepath = os.path.join(full_output_dir, safe_filename)
+        filepath = os.path.normpath(filepath)
         
-        # Сохраняем аудио
-        if isinstance(audio, dict) and "waveform" in audio:
-            audio_np = audio["waveform"].cpu().numpy().squeeze()
-        else:
-            audio_np = audio.cpu().numpy().squeeze() if isinstance(audio, torch.Tensor) else np.array(audio)
+        # 4. Двойная проверка, что файл сохраняется в правильной директории
+        if not filepath.startswith(full_output_dir):
+            print(f"⚠️ Попытка сохранить файл за пределами директории: {filename}")
+            safe_filename = "output.wav"
+            filepath = os.path.join(full_output_dir, safe_filename)
         
-        sf.write(filepath, audio_np, sample_rate)
+        # === ОЧИСТКА ДИРЕКТОРИИ (если выбрано) ===
+        if clear_output_dir == "yes":
+            # Очищаем только если директория существует и внутри разрешенной зоны
+            if os.path.exists(full_output_dir) and full_output_dir.startswith(base_output_norm):
+                try:
+                    print(f"🧹 Очистка директории: {full_output_dir}")
+                    for item in os.listdir(full_output_dir):
+                        item_path = os.path.join(full_output_dir, item)
+                        try:
+                            if os.path.isfile(item_path) or os.path.islink(item_path):
+                                os.unlink(item_path)
+                            elif os.path.isdir(item_path):
+                                # Проверяем, что это не симлинк на внешнюю директорию
+                                if not os.path.islink(item_path):
+                                    shutil.rmtree(item_path)
+                        except Exception as e:
+                            print(f"⚠️ Не удалось удалить {item_path}: {e}")
+                except Exception as e:
+                    print(f"⚠️ Ошибка при очистке директории: {e}")
+            else:
+                print(f"⚠️ Директория для очистки не найдена или небезопасна: {full_output_dir}")
         
-        # Сохраняем метаданные
-        if metadata.strip():
-            metadata_file = filepath.replace('.wav', '.json')
+        # === СОЗДАНИЕ ДИРЕКТОРИИ ===
+        try:
+            os.makedirs(full_output_dir, exist_ok=True)
+            print(f"📁 Директория создана/подготовлена: {full_output_dir}")
+        except Exception as e:
+            print(f"❌ Не удалось создать директорию {full_output_dir}: {e}")
+            # Создаем стандартную директорию в случае ошибки
+            full_output_dir = os.path.join(base_output_dir, "output")
+            os.makedirs(full_output_dir, exist_ok=True)
+            safe_filename = "output.wav"
+            filepath = os.path.join(full_output_dir, safe_filename)
+        
+        # === СОХРАНЕНИЕ АУДИО ===
+        try:
+            if isinstance(audio, dict) and "waveform" in audio:
+                audio_np = audio["waveform"].cpu().numpy().squeeze()
+                actual_sample_rate = audio.get("sample_rate", sample_rate)
+            else:
+                audio_np = audio.cpu().numpy().squeeze() if isinstance(audio, torch.Tensor) else np.array(audio)
+                actual_sample_rate = sample_rate
+            
+            # Используем актуальную частоту дискретизации из аудио или переданную
+            save_sample_rate = actual_sample_rate if actual_sample_rate else sample_rate
+            
+            # Нормализуем аудио данные
+            if audio_np.dtype != np.float32:
+                if audio_np.dtype in [np.int16, np.int32]:
+                    audio_np = audio_np.astype(np.float32) / 32768.0
+                else:
+                    audio_np = audio_np.astype(np.float32)
+            
+            # Обрезаем значения до безопасного диапазона
+            audio_np = np.clip(audio_np, -1.0, 1.0)
+            
+            # Сохраняем файл
+            sf.write(filepath, audio_np, save_sample_rate, subtype='FLOAT')
+            print(f"💾 Аудио сохранено: {filepath}")
+            print(f"   Частота дискретизации: {save_sample_rate} Hz")
+            print(f"   Длина: {len(audio_np)/save_sample_rate:.2f} сек")
+            
+        except Exception as e:
+            print(f"❌ Ошибка при сохранении аудио: {e}")
+            traceback.print_exc()
+            # Возвращаем путь к файлу даже при ошибке
+            return (filepath,)
+        
+        # === СОХРАНЕНИЕ МЕТАДАННЫХ ===
+        if metadata and isinstance(metadata, str) and metadata.strip():
+            metadata_file = os.path.splitext(filepath)[0] + '.json'
             try:
-                meta_dict = json.loads(metadata) if isinstance(metadata, str) else metadata
+                # Пытаемся разобрать JSON
+                if metadata.strip().startswith('{'):
+                    meta_dict = json.loads(metadata)
+                else:
+                    meta_dict = {"metadata": metadata}
+                
+                # Добавляем системную информацию
                 meta_dict.update({
                     "save_time": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "output_dir": output_dir,
-                    "cleared_before_save": clear_output_dir == "yes"
+                    "output_dir": safe_output_dir,
+                    "filename": safe_filename,
+                    "cleared_before_save": clear_output_dir == "yes",
+                    "sample_rate": save_sample_rate,
+                    "duration_sec": len(audio_np)/save_sample_rate if 'audio_np' in locals() else 0,
                 })
+                
+                # Сохраняем метаданные
                 with open(metadata_file, 'w', encoding='utf-8') as f:
                     json.dump(meta_dict, f, indent=2, ensure_ascii=False)
+                
+                print(f"📋 Метаданные сохранены: {metadata_file}")
+                
+            except json.JSONDecodeError:
+                # Если это не JSON, сохраняем как текст
+                try:
+                    with open(metadata_file, 'w', encoding='utf-8') as f:
+                        f.write(f"Metadata saved at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                        f.write("=" * 50 + "\n")
+                        f.write(metadata)
+                    print(f"📝 Метаданные сохранены как текст: {metadata_file}")
+                except Exception as e:
+                    print(f"⚠️ Не удалось сохранить метаданные: {e}")
             except Exception as e:
-                print(f"⚠️ Не удалось сохранить метаданные: {e}")
+                print(f"⚠️ Ошибка при сохранении метаданных: {e}")
         
-        print(f"💾 Аудио сохранено: {filepath}")
         return (filepath,)
 
 
@@ -939,9 +1194,21 @@ class QwenTTSEmotionMixer:
         print("🎚️ Микширование эмоциональных вариантов...")
         
         try:
-            weight_list = [float(w.strip()) for w in weights[0].split(',')]
-        except:
+            # Безопасная обработка весов
+            if weights and isinstance(weights, list) and len(weights) > 0:
+                weight_str = str(weights[0])
+                # Разрешаем только цифры, точки и запятые
+                safe_weight_str = re.sub(r'[^0-9.,]', '', weight_str)
+                weight_list = [float(w.strip()) for w in safe_weight_str.split(',') if w.strip()]
+            else:
+                weight_list = []
+        except Exception as e:
+            print(f"⚠️ Ошибка при обработке весов: {e}")
             weight_list = [1.0] * len(audio_tensors)
+        
+        # Если весов меньше чем аудио, дополняем
+        if len(weight_list) < len(audio_tensors):
+            weight_list.extend([1.0] * (len(audio_tensors) - len(weight_list)))
         
         waveforms = []
         max_len = 0
@@ -963,11 +1230,17 @@ class QwenTTSEmotionMixer:
         
         if normalize == "yes" and weight_list:
             weight_sum = sum(weight_list)
-            weight_list = [w / weight_sum for w in weight_list]
+            if weight_sum > 0:
+                weight_list = [w / weight_sum for w in weight_list]
         
         mixed = np.zeros_like(padded[0])
         for wf, w in zip(padded, weight_list):
             mixed += wf * w
+        
+        # Нормализуем результат
+        max_val = np.max(np.abs(mixed))
+        if max_val > 1.0:
+            mixed = mixed / max_val
         
         mixed_tensor = torch.from_numpy(mixed).unsqueeze(0).unsqueeze(0)
         sample_rate = audio_tensors[0].get("sample_rate", 24000) if isinstance(audio_tensors[0], dict) else 24000
