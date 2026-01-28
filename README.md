@@ -8,9 +8,9 @@
   
   **Nodes to integrate Qwen3-TTS into ComfyUI with emotion support and voice cloning**
 
-  [! [Python Version](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/)
-  [! [PyTorch](https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?logo=PyTorch&logoColor=white)](https://pytorch.org/)
-  [! [Hugging Face](https://img.shields.io/badge/Hugging%20Face-Models-yellow)](https://huggingface.co/Qwen)
+![Python Version](https://img.shields.io/badge/python-3.8+-blue.svg)(https://www.python.org/)
+![PyTorch](https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?logo=PyTorch&logoColor=white)(https://pytorch.org/)
+![Hugging Face](https://img.shields.io/badge/Hugging%20Face-Models-yellow)(https://huggingface.co/Qwen)
 
 </div>
 
@@ -289,6 +289,7 @@ Welcome:
 ⭐ If you like this project, put a star on GitHub!
 
 </div>
+
 
 
 
