@@ -1,7 +1,7 @@
 __version__ = "1.0.5"
 __author__ = "DVA"
-__description__ = "DVA Qwen3_TTS_Nodes for emotional clone speak"
-
+__description__ = "High-quality multilingual TTS with voice cloning, emotion control, and support for Qwen3-TTS models (CustomVoice, VoiceDesign, Base)."
+__title__ = "DVA_Qwen_TTS"
 try:
     import comfy.utils
     COMFYUI_AVAILABLE = True
@@ -16,6 +16,7 @@ else:
     NODE_DISPLAY_NAME_MAPPINGS.update(imported_display_names)
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "__version__", "__author__"]
+
 
 
 
