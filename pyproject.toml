@@ -1,0 +1,20 @@
+[project]
+name = "comfyui_qwen_tts_dva"
+description = "Custom Nodes for Qwen TTS (Text-to-Speech), Voice Cloning, Batch Generation and Emotion Mixing with DVA integration"
+version = "1.0.0"
+license = { file = "LICENSE" }
+dependencies = [
+    "torch>=2.0.1,<3.0.0",
+    "numpy>=1.21.0",
+    "soundfile>=0.12.0",
+    "qwen-tts>=0.1.0",
+]
+
+[project.urls]
+Repository = "https://github.com/SLVGITHUB/QWEN3_TTS_DVA"
+
+[tool.comfy]
+PublisherId = "SLVGITHUB"
+DisplayName = "DVA Qwen TTS Nodes"
+Icon = ""
+Models = []
