@@ -1,5 +1,4 @@
 import os
-import shutil
 import torch
 import numpy as np
 import folder_paths
@@ -9,7 +8,11 @@ import traceback
 import tempfile
 import soundfile as sf
 import re
-from typing import List, Tuple, Dict
+import uuid
+import pathlib
+import posixpath
+import hashlib
+from typing import List, Dict, Any
 
 # Попробуем импортировать qwen_tts
 try:
@@ -21,164 +24,138 @@ except ImportError:
 
 
 def _detect_model_type(model_name):
-    if "CustomVoice" in model_name:
+    """Безопасное определение типа модели"""
+    if not isinstance(model_name, str):
+        return "base"
+    
+    model_name_lower = model_name.lower()
+    if "customvoice" in model_name_lower:
         return "custom_voice"
-    elif "VoiceDesign" in model_name:
+    elif "voicedesign" in model_name_lower or "voice_design" in model_name_lower:
         return "voice_design"
     else:
         return "base"
 
 
-class PathSanitizer:
-    """Класс для безопасной обработки путей и имен файлов"""
+def _sanitize_filename(filename, max_length=100):
+    """Безопасное создание имени файла без path traversal"""
+    if not filename:
+        return "output.wav"
     
-    @staticmethod
-    def sanitize_path(path: str, allow_absolute: bool = False) -> str:
-        """
-        Очищает путь от path traversal атак и опасных символов
+    # Удаляем все пути и оставляем только имя файла
+    base_name = os.path.basename(str(filename))
+    
+    # Заменяем опасные символы, разрешаем буквы, цифры, пробелы, точку, дефис, подчеркивание
+    sanitized = re.sub(r'[^\w\s\.\-]', '_', base_name)
+    
+    # Убираем множественные подчеркивания
+    sanitized = re.sub(r'_+', '_', sanitized)
+    
+    # Убираем начальные/конечные точки и пробелы
+    sanitized = sanitized.strip('. ')
+    
+    # Обрезаем до максимальной длины
+    if len(sanitized) > max_length:
+        name, ext = os.path.splitext(sanitized)
+        sanitized = name[:max_length - len(ext)] + ext
+    
+    # Убеждаемся, что не пустая строка
+    if not sanitized or sanitized in ['.', '..']:
+        sanitized = "output"
+    
+    # Добавляем расширение .wav если нет
+    if not sanitized.lower().endswith('.wav'):
+        sanitized += '.wav'
+    
+    return sanitized
+
+
+def _safe_json_loads(json_str, max_size=10000):
+    """Безопасная загрузка JSON с ограничениями"""
+    if not json_str or not isinstance(json_str, str):
+        return {}
+    
+    # Ограничиваем размер входных данных
+    if len(json_str) > max_size:
+        json_str = json_str[:max_size]
+    
+    try:
+        parsed = json.loads(json_str)
         
-        Args:
-            path: Исходный путь
-            allow_absolute: Разрешить абсолютные пути (только если они внутри разрешенных директорий)
+        # Проверяем тип данных
+        if not isinstance(parsed, (dict, list)):
+            return {"data": str(parsed)[:500]}
         
-        Returns:
-            Очищенный безопасный путь
-        """
-        if not path or not isinstance(path, str):
-            return ""
-        
-        # Удаляем все попытки path traversal
-        cleaned = re.sub(r'\.\./|\.\.\\', '', path)
-        
-        # Заменяем множественные разделители
-        cleaned = re.sub(r'[/\\]{2,}', '/', cleaned)
-        
-        # Убираем опасные символы (разрешаем буквы, цифры, пробел, -_./)
-        safe_chars = set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
-                        '0123456789'
-                        '_-./ \\')
-        cleaned = ''.join(c for c in cleaned if c in safe_chars)
-        
-        # Удаляем ведущие/завершающие пробелы и точки
-        cleaned = cleaned.strip(' .')
-        
-        # Если путь должен быть абсолютным, проверяем его безопасность
-        if allow_absolute and os.path.isabs(cleaned):
-            # Для абсолютных путей проверяем, что они внутри разрешенных директорий
-            allowed_dirs = [
-                folder_paths.get_output_directory(),
-                folder_paths.get_temp_directory(),
-                folder_paths.get_input_directory(),
-                os.path.expanduser("~"),
-            ]
+        # Рекурсивная функция для ограничения глубины и размера
+        def limit_structure(obj, depth=0, max_depth=10, max_items=100):
+            if depth > max_depth:
+                return "[max depth reached]"
             
-            # Нормализуем путь
-            cleaned = os.path.normpath(cleaned)
-            
-            # Проверяем, что путь начинается с одной из разрешенных директорий
-            is_safe = False
-            for allowed_dir in allowed_dirs:
-                allowed_norm = os.path.normpath(allowed_dir)
-                if cleaned.startswith(allowed_norm):
-                    is_safe = True
-                    break
-            
-            if not is_safe:
-                # Если путь небезопасный, преобразуем в относительный
-                cleaned = os.path.basename(cleaned)
+            if isinstance(obj, dict):
+                # Ограничиваем количество ключей
+                items = list(obj.items())[:max_items]
+                return {str(k)[:100]: limit_structure(v, depth+1, max_depth, max_items) 
+                       for k, v in items}
+            elif isinstance(obj, list):
+                # Ограничиваем длину списка
+                return [limit_structure(item, depth+1, max_depth, max_items) 
+                       for item in obj[:max_items]]
+            elif isinstance(obj, str):
+                # Ограничиваем длину строк
+                return obj[:500]
+            elif isinstance(obj, (int, float, bool, type(None))):
+                return obj
+            else:
+                return str(obj)[:200]
         
-        return cleaned
+        return limit_structure(parsed)
+    except (json.JSONDecodeError, TypeError, ValueError) as e:
+        return {"error": "invalid_json", "message": str(e)[:200]}
+
+
+def _validate_path(path, allowed_base=None):
+    """Проверка безопасности пути"""
+    if not path or not isinstance(path, str):
+        return False, "Путь должен быть строкой"
     
-    @staticmethod
-    def sanitize_filename(filename: str) -> str:
-        """
-        Очищает имя файла от опасных символов и path traversal
-        
-        Args:
-            filename: Исходное имя файла
-        
-        Returns:
-            Очищенное безопасное имя файла
-        """
-        if not filename or not isinstance(filename, str):
-            return "output.wav"
-        
-        # Удаляем path traversal
-        cleaned = re.sub(r'\.\./|\.\.\\', '', filename)
-        
-        # Берем только имя файла (не путь)
-        basename = os.path.basename(cleaned)
-        
-        # Удаляем опасные символы
-        safe_chars = set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
-                        '0123456789'
-                        '_- .')
-        cleaned = ''.join(c for c in basename if c in safe_chars)
-        
-        # Удаляем ведущие/завершающие пробелы и точки
-        cleaned = cleaned.strip(' .')
-        
-        # Ограничиваем длину (максимум 255 символов)
-        if len(cleaned) > 255:
-            name, ext = os.path.splitext(cleaned)
-            cleaned = name[:250] + ext
-        
-        # Если имя файла пустое после очистки
-        if not cleaned:
-            cleaned = "output.wav"
-        
-        return cleaned
+    # Нормализуем путь
+    normalized = os.path.normpath(path)
     
-    @staticmethod
-    def ensure_safe_extension(filename: str, default_ext: str = ".wav") -> str:
-        """
-        Убеждается, что у файла безопасное расширение
-        
-        Args:
-            filename: Имя файла
-            default_ext: Расширение по умолчанию
-        
-        Returns:
-            Имя файла с безопасным расширением
-        """
-        if not filename:
-            return f"output{default_ext}"
-        
-        # Получаем расширение
-        name, ext = os.path.splitext(filename)
-        
-        # Разрешенные аудио расширения
-        allowed_extensions = {'.wav', '.mp3', '.ogg', '.flac', '.m4a'}
-        
-        # Если расширение не разрешено или отсутствует, используем default_ext
-        if not ext or ext.lower() not in allowed_extensions:
-            ext = default_ext
-        
-        # Очищаем имя файла
-        safe_name = PathSanitizer.sanitize_filename(name)
-        
-        return safe_name + ext
+    # Проверяем на path traversal
+    if '..' in normalized.split(os.sep):
+        return False, "Путь содержит '..' (path traversal)"
     
-    @staticmethod
-    def create_secure_temp_file(suffix: str = ".wav") -> str:
-        """
-        Создает безопасный временный файл
-        
-        Args:
-            suffix: Расширение файла
-        
-        Returns:
-            Путь к временному файлу
-        """
-        # Используем tempfile с явными параметрами безопасности
-        temp_dir = tempfile.gettempdir()
-        safe_suffix = PathSanitizer.sanitize_filename(suffix)
-        
-        # Создаем временный файл с безопасным именем
-        fd, temp_path = tempfile.mkstemp(suffix=safe_suffix, dir=temp_dir)
-        os.close(fd)
-        
-        return temp_path
+    # Проверяем абсолютные пути
+    if os.path.isabs(path) and allowed_base:
+        # Проверяем, что путь находится внутри разрешенной базовой директории
+        try:
+            common = os.path.commonpath([normalized, allowed_base])
+            if common != allowed_base:
+                return False, "Путь находится вне разрешенной директории"
+        except ValueError:
+            return False, "Недопустимый путь"
+    
+    # Проверяем длину
+    if len(path) > 500:
+        return False, "Слишком длинный путь"
+    
+    return True, normalized
+
+
+def _create_safe_temp_file(suffix='.wav', data=None, sample_rate=24000):
+    """Создание безопасного временного файла"""
+    safe_temp_dir = tempfile.gettempdir()
+    temp_filename = f"qwen_tts_{uuid.uuid4().hex}_{int(time.time())}{suffix}"
+    temp_path = os.path.join(safe_temp_dir, temp_filename)
+    
+    # Записываем данные если они предоставлены
+    if data is not None:
+        try:
+            sf.write(temp_path, data, sample_rate)
+        except Exception as e:
+            raise ValueError(f"Не удалось записать временный файл: {e}")
+    
+    return temp_path
 
 
 class QwenTTSModelLoader:
@@ -213,12 +190,16 @@ class QwenTTSModelLoader:
         
         print(f"🔄 Загрузка модели TTS: {model_name}")
         
+        # Валидация входных данных
+        if not isinstance(model_name, str):
+            raise ValueError("model_name должен быть строкой")
+        
         dtype_map = {
             "fp16": torch.float16,
             "bf16": torch.bfloat16,
             "fp32": torch.float32,
         }
-        dtype = dtype_map[precision]
+        dtype = dtype_map.get(precision, torch.float16)
         
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -228,21 +209,38 @@ class QwenTTSModelLoader:
                 "torch_dtype": dtype,
                 "device_map": device,
                 "low_cpu_mem_usage": True,
-                "trust_remote_code": True,
+                "trust_remote_code": False,  # Безопасность по умолчанию
             }
             
-            # Безопасная обработка cache_dir
-            if cache_dir and isinstance(cache_dir, str):
-                safe_cache_dir = PathSanitizer.sanitize_path(cache_dir, allow_absolute=True)
-                if safe_cache_dir and os.path.exists(safe_cache_dir):
-                    kwargs["cache_dir"] = safe_cache_dir
-                    print(f"📁 Используется cache_dir: {safe_cache_dir}")
+            # Доверенные модели (из официального источника)
+            trusted_models = [
+                "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+                "Qwen/Qwen3-TTS-24Hz-1.7B-Base",
+                "Qwen/Qwen3-TTS-12Hz-1.7B-Instruct",
+                "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+                "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+            ]
+            
+            if model_name in trusted_models:
+                kwargs["trust_remote_code"] = True
+                print(f"✅ Модель {model_name} в списке доверенных")
+            else:
+                print(f"⚠️ Модель {model_name} не в доверенном списке, remote_code отключен")
+            
+            # Безопасная проверка cache_dir
+            if cache_dir and isinstance(cache_dir, str) and cache_dir.strip():
+                cache_dir = cache_dir.strip()
+                is_valid, validated_path = _validate_path(cache_dir)
+                if is_valid and os.path.exists(os.path.dirname(validated_path)):
+                    kwargs["cache_dir"] = validated_path
+                else:
+                    print(f"⚠️ Недопустимый cache_dir, используется значение по умолчанию")
             
             try:
                 kwargs["attn_implementation"] = attention_type
                 model = Qwen3TTSModel.from_pretrained(model_name, **kwargs)
-            except Exception:
-                print("⚠️ Fallback на eager attention")
+            except Exception as e:
+                print(f"⚠️ Fallback на eager attention: {e}")
                 kwargs["attn_implementation"] = "eager"
                 model = Qwen3TTSModel.from_pretrained(model_name, **kwargs)
             
@@ -254,12 +252,14 @@ class QwenTTSModelLoader:
                 "attention_type": attention_type,
                 "device": str(model.device),
                 "model_type": _detect_model_type(model_name),
+                "trusted": model_name in trusted_models,
             }
             
             return (model,)
             
         except Exception as e:
             print(f"❌ Ошибка загрузки модели: {e}")
+            traceback.print_exc()
             raise e
 
 
@@ -296,9 +296,27 @@ class QwenTTSGenerate:
     def generate_speech(self, qwen_model, text, language, temperature, top_p, seed,
                        speaker="Vivian", instruct="", emotion_preset="neutral"):
         
+        # Безопасная обработка seed
+        try:
+            seed = int(seed) & 0xFFFFFFFF  # Ограничиваем размер seed
+        except (ValueError, TypeError):
+            seed = 0
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
+        
+        # Безопасная обработка текста
+        if not isinstance(text, str):
+            text = str(text)
+        text = text.strip()[:5000]  # Ограничиваем длину текста
+        
+        # Безопасная обработка speaker
+        if speaker and isinstance(speaker, str):
+            speaker = re.sub(r'[^\w\s\-]', '', speaker.strip())[:50]
+        
+        # Безопасная обработка instruct
+        if instruct and isinstance(instruct, str):
+            instruct = instruct.strip()[:1000]
         
         # Эмоции → instruct
         emotion_to_instruct = {
@@ -312,6 +330,7 @@ class QwenTTSGenerate:
             "dramatic": "театральный и выразительный тон",
             "professional": "чёткий и деловой тон",
         }
+        
         if emotion_preset != "neutral" and not instruct:
             instruct = emotion_to_instruct.get(emotion_preset, "")
         
@@ -320,40 +339,66 @@ class QwenTTSGenerate:
         
         print(f"🎤 Генерация: {text[:50]}...")
         print(f"⚙️ Тип модели: {model_type}, язык: {language}, эмоция: {emotion_preset}")
-        if instruct:
-            print(f"📋 Инструкция: {instruct}")
         
         try:
             start_time = time.time()
             
+            # Безопасная генерация в зависимости от типа модели
+            safe_temperature = max(0.1, min(2.0, float(temperature)))
+            safe_top_p = max(0.1, min(1.0, float(top_p)))
+            
             if model_type == "custom_voice":
+                if not speaker:
+                    speaker = "Vivian"
+                
                 wavs, sr = qwen_model.generate_custom_voice(
                     text=text,
                     language=lang,
                     speaker=speaker,
                     instruct=instruct,
-                    temperature=temperature,
-                    top_p=top_p,
+                    temperature=safe_temperature,
+                    top_p=safe_top_p,
                     max_new_tokens=1024,
                 )
             elif model_type == "voice_design":
                 if not instruct:
                     instruct = "естественный и чёткий голос"
+                
                 wavs, sr = qwen_model.generate_voice_design(
                     text=text,
                     language=lang,
                     instruct=instruct,
-                    temperature=temperature,
-                    top_p=top_p,
+                    temperature=safe_temperature,
+                    top_p=safe_top_p,
                     max_new_tokens=1024,
                 )
-            else:  # base — без ref_audio использовать нельзя
-                raise ValueError("Модель типа 'Base' требует референсного аудио. Используйте CustomVoice или VoiceDesign.")
+            else:  # base модели
+                # Для base моделей нужен хотя бы минимальный текст инструкции
+                if not instruct:
+                    instruct = "нейтральный тон"
+                
+                # Генерация без референсного аудио
+                wavs, sr = qwen_model.generate_voice_design(
+                    text=text,
+                    language=lang,
+                    instruct=instruct,
+                    temperature=safe_temperature,
+                    top_p=safe_top_p,
+                    max_new_tokens=1024,
+                )
             
             duration = time.time() - start_time
+            
+            # Безопасная обработка аудиоданных
             audio_data = wavs[0] if isinstance(wavs, list) else wavs
             if torch.is_tensor(audio_data):
-                audio_data = audio_data.cpu().numpy()
+                audio_data = audio_data.detach().cpu().numpy()
+            
+            # Проверяем размер аудио (не более 10 минут)
+            max_samples = 10 * 60 * sr  # 10 минут
+            if len(audio_data) > max_samples:
+                audio_data = audio_data[:max_samples]
+                print(f"⚠️ Аудио обрезано до 10 минут")
             
             # Формат ComfyUI: [B, C, T] → [1, 1, T]
             audio_tensor = torch.from_numpy(audio_data).unsqueeze(0).unsqueeze(0)
@@ -366,9 +411,14 @@ class QwenTTSGenerate:
                 "model_type": model_type,
                 "parameters": {
                     "language": language,
-                    "speaker": speaker if model_type == "custom_voice" else None,
-                    "instruct": instruct,
+                    "speaker": speaker if model_type == "custom_voice" else "default",
+                    "instruct": instruct[:100] if instruct else "",
                     "emotion_preset": emotion_preset,
+                    "text_length": len(text),
+                },
+                "security": {
+                    "trusted_model": qwen_model.metadata.get("trusted", False),
+                    "input_sanitized": True,
                 }
             }
             
@@ -380,165 +430,7 @@ class QwenTTSGenerate:
             traceback.print_exc()
             silence = torch.zeros((1, 1, 24000))
             sr = 24000
-            return ({"waveform": silence, "sample_rate": sr}, f"Error: {str(e)}")
-
-
-class EmotionControlParameters:
-    """Класс для управления эмоциональными параметрами голоса"""
-    
-    def __init__(self):
-        # Параметры по умолчанию (нейтральные)
-        self.params = {
-            "tempo": 1.0,           # темп речи (0.7 медленно - 1.3 быстро)
-            "pitch": 0.0,           # высота тона (-0.3 низко - +0.3 высоко)
-            "energy": 0.0,          # энергия/громкость (-0.3 тихо - +0.3 громко)
-            "brightness": 0.0,      # яркость голоса (-0.3 тускло - +0.3 ярко)
-            "warmth": 0.0,          # теплота голоса (-0.3 холодно - +0.3 тепло)
-            "articulation": 0.0,    # четкость артикуляции (-0.3 нечетко - +0.3 четко)
-        }
-    
-    def apply_preset(self, preset_name: str):
-        """Применить предустановку эмоции"""
-        presets = {
-            "neutral": {
-                "tempo": 1.0, "pitch": 0.0, "energy": 0.0,
-                "brightness": 0.0, "warmth": 0.0, "articulation": 0.0
-            },
-            "happy": {
-                "tempo": 1.2, "pitch": 0.2, "energy": 0.3,
-                "brightness": 0.3, "warmth": 0.2, "articulation": 0.1
-            },
-            "sad": {
-                "tempo": 0.8, "pitch": -0.2, "energy": -0.3,
-                "brightness": -0.2, "warmth": -0.1, "articulation": 0.0
-            },
-            "angry": {
-                "tempo": 1.1, "pitch": 0.1, "energy": 0.4,
-                "brightness": 0.1, "warmth": -0.2, "articulation": 0.3
-            },
-            "surprised": {
-                "tempo": 1.3, "pitch": 0.4, "energy": 0.5,
-                "brightness": 0.4, "warmth": 0.1, "articulation": 0.2
-            },
-            "energetic": {
-                "tempo": 1.4, "pitch": 0.1, "energy": 0.6,
-                "brightness": 0.2, "warmth": 0.1, "articulation": 0.1
-            },
-            "calm": {
-                "tempo": 0.9, "pitch": -0.1, "energy": -0.2,
-                "brightness": -0.1, "warmth": 0.3, "articulation": 0.0
-            },
-            "dramatic": {
-                "tempo": 1.0, "pitch": 0.3, "energy": 0.4,
-                "brightness": 0.2, "warmth": 0.2, "articulation": 0.4
-            },
-            "professional": {
-                "tempo": 1.0, "pitch": 0.0, "energy": 0.1,
-                "brightness": 0.0, "warmth": 0.0, "articulation": 0.5
-            },
-        }
-        
-        if preset_name in presets:
-            self.params.update(presets[preset_name])
-            return True
-        return False
-    
-    def to_instruct_string(self) -> str:
-        """Преобразовать параметры в текстовую инструкцию"""
-        parts = []
-        
-        # Темп
-        if self.params["tempo"] > 1.1:
-            parts.append("быстрый темп речи")
-        elif self.params["tempo"] < 0.9:
-            parts.append("медленный темп речи")
-        
-        # Высота тона
-        if self.params["pitch"] > 0.1:
-            parts.append("высокий тон голоса")
-        elif self.params["pitch"] < -0.1:
-            parts.append("низкий тон голоса")
-        
-        # Энергия
-        if self.params["energy"] > 0.2:
-            parts.append("энергичный и громкий голос")
-        elif self.params["energy"] < -0.2:
-            parts.append("тихий и вялый голос")
-        
-        # Яркость
-        if self.params["brightness"] > 0.2:
-            parts.append("яркий и звонкий голос")
-        elif self.params["brightness"] < -0.2:
-            parts.append("тусклый голос")
-        
-        # Теплота
-        if self.params["warmth"] > 0.2:
-            parts.append("тёплый и мягкий голос")
-        elif self.params["warmth"] < -0.2:
-            parts.append("холодный голос")
-        
-        # Четкость
-        if self.params["articulation"] > 0.3:
-            parts.append("очень чёткая дикция")
-        elif self.params["articulation"] > 0.1:
-            parts.append("чёткая артикуляция")
-        
-        return ", ".join(parts) if parts else "естественный и нейтральный голос"
-    
-    def to_dict(self) -> dict:
-        """Вернуть параметры как словарь"""
-        return self.params.copy()
-
-
-def parse_text_with_emotions(text: str) -> List[Tuple[str, str]]:
-    """
-    Разобрать текст с эмоциональными маркерами
-    Возвращает список (текст, эмоция)
-    """
-    # Паттерн для поиска эмоциональных маркеров
-    emotion_pattern = r'/(happy|sad|angry|surprised|energetic|calm|dramatic|professional|neutral)\b'
-    
-    # Находим все маркеры и их позиции
-    segments = []
-    current_emotion = "neutral"
-    current_text = ""
-    
-    # Разделяем текст по предложениям
-    sentences = re.split(r'(?<=[.!?])\s+', text)
-    
-    for sentence in sentences:
-        sentence = sentence.strip()
-        if not sentence:
-            continue
-        
-        # Проверяем, есть ли в начале предложения маркер эмоции
-        match = re.match(r'^/(happy|sad|angry|surprised|energetic|calm|dramatic|professional|neutral)\b\s*', sentence)
-        
-        if match:
-            emotion = match.group(1)
-            # Убираем маркер из текста
-            sentence_text = sentence[match.end():].strip()
-            if sentence_text:
-                segments.append((sentence_text, emotion))
-                current_emotion = emotion
-        else:
-            # Используем текущую эмоцию или нейтральную
-            segments.append((sentence, current_emotion))
-    
-    # Если не нашли маркеров, возвращаем весь текст с нейтральной эмоцией
-    if not segments:
-        segments = [(text, "neutral")]
-    
-    return segments
-
-
-def clean_text_from_emotion_markers(text: str) -> str:
-    """Очистить текст от маркеров эмоций"""
-    # Удаляем все маркеры вида /emotion из текста
-    cleaned = re.sub(r'/(happy|sad|angry|surprised|energetic|calm|dramatic|professional|neutral)\b\s*', '', text)
-    # Убираем лишние пробелы
-    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-    return cleaned
+            return ({"waveform": silence, "sample_rate": sr}, json.dumps({"error": str(e)[:200]}, indent=2))
 
 
 class QwenTTSVoiceClone:
@@ -548,7 +440,7 @@ class QwenTTSVoiceClone:
             "required": {
                 "qwen_model": ("QWEN_TTS_MODEL",),
                 "text": ("STRING", {
-                    "default": "Привет! /happy Это здорово! /sad Но потом стало грустно.",
+                    "default": "Привет! Это клонированный голос.",
                     "multiline": True
                 }),
                 "ref_audio": ("AUDIO",),
@@ -563,350 +455,158 @@ class QwenTTSVoiceClone:
             "optional": {
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
                 "output_prefix": ("STRING", {"default": "clone_"}),
-                "global_instruct": ("STRING", {
-                    "default": "естественный голос, хорошая дикция",
-                    "multiline": True
-                }),
-                "enable_emotion_parsing": (["enabled", "disabled"], {"default": "enabled"}),
-                # Индивидуальные эмоциональные параметры
-                "tempo": ("FLOAT", {"default": 1.0, "min": 0.5, "max": 2.0, "step": 0.05}),
-                "pitch": ("FLOAT", {"default": 0.0, "min": -0.5, "max": 0.5, "step": 0.05}),
-                "energy": ("FLOAT", {"default": 0.0, "min": -0.5, "max": 0.5, "step": 0.05}),
-                "brightness": ("FLOAT", {"default": 0.0, "min": -0.5, "max": 0.5, "step": 0.05}),
-                "warmth": ("FLOAT", {"default": 0.0, "min": -0.5, "max": 0.5, "step": 0.05}),
-                "articulation": ("FLOAT", {"default": 0.0, "min": -0.5, "max": 0.5, "step": 0.05}),
             }
         }
     
-    RETURN_TYPES = ("AUDIO", "STRING", "DICT")
-    RETURN_NAMES = ("audio", "info", "emotion_params")
+    RETURN_TYPES = ("AUDIO", "STRING")
+    RETURN_NAMES = ("audio", "info")
     FUNCTION = "clone_voice"
     CATEGORY = "audio/tts"
     
     def clone_voice(self, qwen_model, text, ref_audio, ref_text, language, 
-                   clone_mode, temperature, seed=0, output_prefix="clone_",
-                   global_instruct="естественный голос, хорошая дикция",
-                   enable_emotion_parsing="enabled",
-                   tempo=1.0, pitch=0.0, energy=0.0, 
-                   brightness=0.0, warmth=0.0, articulation=0.0):
+                   clone_mode, temperature, seed=0, output_prefix="clone_"):
         
         model_type = qwen_model.metadata.get("model_type", "base")
         if model_type != "base":
             raise ValueError("Клонирование работает только с моделями типа '-Base'")
         
+        # Безопасная обработка seed
+        try:
+            seed = int(seed) & 0xFFFFFFFF
+        except (ValueError, TypeError):
+            seed = 0
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
         
-        print(f"🎤 Клонирование голоса...")
+        # Безопасная обработка текста
+        if not isinstance(text, str):
+            text = str(text)
+        text = text.strip()[:5000]
         
-        # Создаем объект управления эмоциональными параметрами
-        emotion_control = EmotionControlParameters()
-        
-        # Устанавливаем индивидуальные параметры
-        emotion_control.params.update({
-            "tempo": tempo,
-            "pitch": pitch,
-            "energy": energy,
-            "brightness": brightness,
-            "warmth": warmth,
-            "articulation": articulation,
-        })
+        if not isinstance(ref_text, str):
+            ref_text = str(ref_text)
+        ref_text = ref_text.strip()[:5000]
         
         # Безопасная обработка output_prefix
-        safe_output_prefix = PathSanitizer.sanitize_filename(output_prefix)
+        if output_prefix and isinstance(output_prefix, str):
+            output_prefix = _sanitize_filename(output_prefix, 50).replace('.wav', '')
         
-        # Глобальная инструкция
-        base_instruct = global_instruct.strip()
+        print(f"🎤 Клонирование голоса...")
         
-        # Парсим текст на сегменты с эмоциями
-        if enable_emotion_parsing == "enabled":
-            segments = parse_text_with_emotions(text)
-            print(f"📝 Найдено {len(segments)} сегментов с эмоциями:")
-            for i, (seg_text, emotion) in enumerate(segments):
-                print(f"  {i+1}. [{emotion}] {seg_text[:60]}...")
-        else:
-            # Если парсинг отключен, используем весь текст с нейтральной эмоцией
-            segments = [(clean_text_from_emotion_markers(text), "neutral")]
-            print(f"📝 Используется весь текст с нейтральной эмоцией")
+        # Безопасный путь для временного файла
+        temp_ref_path = None
         
-        # Если только один сегмент, генерируем целиком
-        if len(segments) == 1:
-            seg_text, emotion = segments[0]
+        try:
+            # === Безопасная обработка референсного аудио ===
+            if ref_audio is None:
+                raise ValueError("ref_audio не может быть None")
             
-            # Применяем пресет эмоции
-            emotion_control.apply_preset(emotion)
-            
-            # Комбинируем инструкции
-            emotion_instruct = emotion_control.to_instruct_string()
-            if base_instruct:
-                full_instruct = f"{base_instruct}, {emotion_instruct}"
+            # Извлекаем аудиоданные
+            if isinstance(ref_audio, dict) and "waveform" in ref_audio:
+                ref_wave = ref_audio["waveform"]
+                ref_sr = ref_audio.get("sample_rate", 24000)
+            elif torch.is_tensor(ref_audio):
+                ref_wave = ref_audio
+                ref_sr = 24000
             else:
-                full_instruct = emotion_instruct
+                ref_wave = np.array(ref_audio, dtype=np.float32)
+                ref_sr = 24000
             
-            print(f"🎭 Эмоция: {emotion}")
-            print(f"📋 Полная инструкция: {full_instruct}")
-            print(f"📝 Текст для произношения: {seg_text[:100]}...")
+            # Конвертируем в numpy
+            if torch.is_tensor(ref_wave):
+                ref_np = ref_wave.detach().cpu().numpy()
+            else:
+                ref_np = np.array(ref_wave, dtype=np.float32)
             
-            try:
-                result_audio, result_info = self._generate_single_clone(
-                    qwen_model, seg_text, ref_audio, ref_text, language,
-                    clone_mode, temperature, full_instruct
-                )
-                
-                # Добавляем информацию об эмоциях
-                info_dict = json.loads(result_info)
-                info_dict["emotion_params"] = emotion_control.to_dict()
-                info_dict["emotion_preset"] = emotion
-                info_dict["global_instruct"] = global_instruct
-                info_dict["spoken_text"] = seg_text
-                
-                return (
-                    result_audio,
-                    json.dumps(info_dict, indent=2),
-                    emotion_control.to_dict()
-                )
-                
-            except Exception as e:
-                print(f"❌ Ошибка генерации: {e}")
-                traceback.print_exc()
-                silence = torch.zeros((1, 1, 24000))
-                sr = 24000
-                return (
-                    {"waveform": silence, "sample_rate": sr},
-                    f'{{"error": "{str(e)}"}}',
-                    emotion_control.to_dict()
-                )
-        
-        # Множественные сегменты - генерируем и склеиваем
-        else:
-            print(f"✂️ Генерация {len(segments)} сегментов с разными эмоциями...")
+            # Приводим к форме [T]
+            ref_np = ref_np.squeeze()
             
-            all_audio_segments = []
-            all_segments_info = []
+            # Проверяем размер (не более 30 секунд для клонирования)
+            max_clone_samples = 30 * ref_sr
+            if len(ref_np) > max_clone_samples:
+                ref_np = ref_np[:max_clone_samples]
+                print(f"⚠️ Референсное аудио обрезано до 30 секунд")
             
-            for i, (seg_text, emotion) in enumerate(segments):
-                print(f"  Сегмент {i+1}/{len(segments)}: [{emotion}]")
-                
-                # Применяем пресет для текущей эмоции
-                emotion_control.apply_preset(emotion)
-                
-                # Комбинируем инструкции
-                emotion_instruct = emotion_control.to_instruct_string()
-                if base_instruct:
-                    full_instruct = f"{base_instruct}, {emotion_instruct}"
-                else:
-                    full_instruct = emotion_instruct
-                
-                print(f"    📋 Инструкция: {full_instruct}")
-                print(f"    📝 Текст: {seg_text[:80]}...")
-                
-                try:
-                    # Генерируем сегмент
-                    segment_audio, segment_info = self._generate_single_clone(
-                        qwen_model, seg_text, ref_audio, ref_text, language,
-                        clone_mode, temperature, full_instruct
-                    )
-                    
-                    all_audio_segments.append(segment_audio)
-                    
-                    # Сохраняем информацию о сегменте
-                    seg_info = {
-                        "text": seg_text,
-                        "emotion": emotion,
-                        "emotion_params": emotion_control.to_dict(),
-                        "instruct": full_instruct,
-                        "duration": len(segment_audio["waveform"].squeeze()) / segment_audio["sample_rate"]
-                    }
-                    all_segments_info.append(seg_info)
-                    
-                    print(f"    ✅ Успешно, длина: {seg_info['duration']:.2f} сек")
-                    
-                except Exception as e:
-                    print(f"    ❌ Ошибка: {e}")
-                    # Добавляем тишину вместо ошибки
-                    silence = {"waveform": torch.zeros((1, 1, 24000)), "sample_rate": 24000}
-                    all_audio_segments.append(silence)
-                    
-                    seg_info = {
-                        "text": seg_text,
-                        "emotion": emotion,
-                        "emotion_params": emotion_control.to_dict(),
-                        "instruct": full_instruct,
-                        "error": str(e),
-                        "duration": 0
-                    }
-                    all_segments_info.append(seg_info)
+            # Нормализация диапазона
+            if ref_np.dtype != np.float32:
+                ref_np = ref_np.astype(np.float32)
             
-            # Склеиваем все сегменты
-            print("🔗 Склеивание сегментов...")
-            final_audio = self._concatenate_audio_segments(all_audio_segments)
+            # Проверяем диапазон значений
+            max_val = np.max(np.abs(ref_np))
+            if max_val > 0:
+                ref_np = np.clip(ref_np / max_val, -1.0, 1.0)
             
-            # Формируем итоговую информацию
-            total_duration = sum(info.get("duration", 0) for info in all_segments_info)
+            # Создаем безопасный временный файл
+            temp_ref_path = _create_safe_temp_file(suffix='.wav', data=ref_np, sample_rate=ref_sr)
             
-            final_info = {
-                "sample_rate": final_audio["sample_rate"],
-                "total_duration": total_duration,
-                "segments_count": len(segments),
-                "segments": all_segments_info,
-                "global_instruct": global_instruct,
-                "enable_emotion_parsing": enable_emotion_parsing,
-                "original_text": text,
-                "cleaned_text": " ".join([seg[0] for seg in segments]),
+            # Проверяем размер файла (не более 50MB)
+            file_size = os.path.getsize(temp_ref_path)
+            if file_size > 50 * 1024 * 1024:  # 50 MB
+                raise ValueError("Слишком большой временный файл")
+            
+            gen_kwargs = {
+                "text": text,
+                "ref_audio": temp_ref_path,
+                "ref_text": ref_text,
+                "language": language if language != "Auto" else None,
+                "x_vector_only_mode": (clone_mode == "x_vector_only"),
+                "temperature": max(0.1, min(2.0, float(temperature))),
+                "top_p": 0.9,
+                "top_k": 50,
+                "repetition_penalty": 1.05,
+                "max_new_tokens": 1024,
+                "do_sample": True,
             }
             
-            print(f"✅ Все сегменты склеены, общая длина: {total_duration:.2f} сек")
-            
-            return (
-                final_audio,
-                json.dumps(final_info, indent=2, ensure_ascii=False),
-                emotion_control.to_dict()
-            )
-    
-    def _generate_single_clone(self, qwen_model, text, ref_audio, ref_text, language,
-                             clone_mode, temperature, instruct=""):
-        """Генерирует один сегмент клонированного голоса"""
-        
-        # === Извлечение и конвертация референсного аудио ===
-        if isinstance(ref_audio, dict) and "waveform" in ref_audio:
-            ref_wave = ref_audio["waveform"]  # [B, C, T]
-            ref_sr = ref_audio.get("sample_rate", 24000)
-        else:
-            ref_wave = ref_audio
-            ref_sr = 24000
-
-        if isinstance(ref_wave, torch.Tensor):
-            ref_np = ref_wave.cpu().numpy()
-        else:
-            ref_np = np.array(ref_wave)
-
-        # Приведение к форме [C, T]
-        if ref_np.ndim == 3:
-            ref_np = ref_np[0]  # [B, C, T] → [C, T]
-        elif ref_np.ndim == 1:
-            ref_np = ref_np[np.newaxis, :]  # [T] → [1, T]
-
-        # Транспонирование в [T, C] для soundfile
-        ref_np = ref_np.T
-
-        # Нормализация типа и диапазона
-        if ref_np.dtype in [np.int16, np.int32, np.int64]:
-            ref_np = ref_np.astype(np.float32) / 32768.0
-        elif ref_np.dtype == np.float64:
-            ref_np = ref_np.astype(np.float32)
-
-        # Обрезка до [-1, 1]
-        ref_np = np.clip(ref_np, -1.0, 1.0)
-
-        # Используем безопасный метод создания временного файла
-        temp_ref_path = PathSanitizer.create_secure_temp_file('.wav')
-        sf.write(temp_ref_path, ref_np, ref_sr, subtype='FLOAT')
-        
-        # ВАЖНО: НЕ добавляем инструкцию к тексту!
-        # Инструкция передается отдельно в generate_voice_clone
-        full_text = text  # Используем только оригинальный текст
-        
-        print(f"    📤 Передача инструкции отдельно, текст: {full_text[:60]}...")
-        
-        # Формируем аргументы для клонирования
-        gen_kwargs = {
-            "text": full_text,  # Только текст для произношения
-            "ref_audio": temp_ref_path,
-            "ref_text": ref_text,
-            "language": language if language != "Auto" else None,
-            "x_vector_only_mode": (clone_mode == "x_vector_only"),
-            "temperature": temperature,
-            "top_p": 0.9,
-            "top_k": 50,
-            "repetition_penalty": 1.05,
-            "max_new_tokens": 1024,
-            "do_sample": True,
-        }
-        
-        # Если есть инструкция, добавляем ее в kwargs
-        if instruct:
-            # Qwen TTS использует параметр 'instruct' для передачи инструкций
-            # Но для модели Base может не поддерживаться
-            try:
-                # Пробуем передать инструкцию через ref_text или в отдельном параметре
-                if hasattr(qwen_model, 'generate_voice_clone_with_instruct'):
-                    # Если есть специальный метод с инструкцией
-                    wavs, sr = qwen_model.generate_voice_clone_with_instruct(
-                        **gen_kwargs, instruct=instruct
-                    )
-                else:
-                    # Стандартный способ - инструкция передается в ref_text или text
-                    # Для Qwen можно попробовать добавить инструкцию в ref_text
-                    original_ref_text = ref_text
-                    enhanced_ref_text = f"[{instruct}] {original_ref_text}"
-                    gen_kwargs["ref_text"] = enhanced_ref_text
-                    
-                    start_time = time.time()
-                    wavs, sr = qwen_model.generate_voice_clone(**gen_kwargs)
-                    generation_time = time.time() - start_time
-                    
-                    # Возвращаем оригинальный ref_text в info
-                    gen_kwargs["ref_text"] = original_ref_text
-            except Exception as e:
-                print(f"⚠️ Не удалось передать инструкцию, используем базовую генерацию: {e}")
-                start_time = time.time()
-                wavs, sr = qwen_model.generate_voice_clone(**gen_kwargs)
-                generation_time = time.time() - start_time
-        else:
             start_time = time.time()
             wavs, sr = qwen_model.generate_voice_clone(**gen_kwargs)
             generation_time = time.time() - start_time
-        
-        # Безопасное удаление временного файла
-        try:
-            if os.path.exists(temp_ref_path):
-                os.unlink(temp_ref_path)
+            
+            # Обработка результата
+            audio_data = wavs[0] if isinstance(wavs, list) else wavs
+            if torch.is_tensor(audio_data):
+                audio_data = audio_data.detach().cpu().numpy()
+            
+            # Проверяем размер результата
+            max_result_samples = 10 * 60 * sr  # 10 минут
+            if len(audio_data) > max_result_samples:
+                audio_data = audio_data[:max_result_samples]
+                print(f"⚠️ Результат клонирования обрезан до 10 минут")
+            
+            audio_tensor = torch.from_numpy(audio_data).unsqueeze(0).unsqueeze(0)
+            
+            info = {
+                "sample_rate": sr,
+                "duration": round(len(audio_data) / sr, 2),
+                "generation_time": round(generation_time, 2),
+                "clone_mode": clone_mode,
+                "temperature": temperature,
+                "original_duration": round(len(ref_np) / ref_sr, 2),
+                "security": {
+                    "temp_file": "deleted",
+                    "input_sanitized": True,
+                }
+            }
+            
+            print(f"✅ Клонирование успешно за {generation_time:.2f} сек")
+            
+            return ({"waveform": audio_tensor, "sample_rate": sr}, json.dumps(info, indent=2))
+            
         except Exception as e:
-            print(f"⚠️ Не удалось удалить временный файл {temp_ref_path}: {e}")
+            print(f"❌ Ошибка клонирования: {e}")
+            traceback.print_exc()
+            silence = torch.zeros((1, 1, 24000))
+            sr = 24000
+            return ({"waveform": silence, "sample_rate": sr}, json.dumps({"error": str(e)[:200]}, indent=2))
         
-        audio_data = wavs[0] if isinstance(wavs, list) else wavs
-        if torch.is_tensor(audio_data):
-            audio_data = audio_data.cpu().numpy()
-        
-        audio_tensor = torch.from_numpy(audio_data).unsqueeze(0).unsqueeze(0)
-        
-        info = {
-            "sample_rate": sr,
-            "duration": len(audio_data) / sr,
-            "generation_time": generation_time,
-            "clone_mode": clone_mode,
-            "temperature": temperature,
-            "instruct": instruct if instruct else None,
-        }
-        
-        return {"waveform": audio_tensor, "sample_rate": sr}, json.dumps(info, indent=2)
-    
-    def _concatenate_audio_segments(self, audio_segments: List[dict]) -> dict:
-        """Склеить несколько аудио сегментов в один"""
-        if not audio_segments:
-            # Возвращаем тишину, если нет сегментов
-            return {"waveform": torch.zeros((1, 1, 24000)), "sample_rate": 24000}
-        
-        # Проверяем, что все сегменты имеют одинаковую частоту дискретизации
-        sample_rates = [seg["sample_rate"] for seg in audio_segments]
-        if len(set(sample_rates)) > 1:
-            print("⚠️ Разные частоты дискретизации, используем первую")
-        
-        target_sr = sample_rates[0]
-        
-        # Собираем все waveform в один тензор
-        waveforms = []
-        for seg in audio_segments:
-            wf = seg["waveform"]
-            if wf.shape[0] > 1:  # [B, C, T] -> берем первый батч
-                wf = wf[0:1]
-            waveforms.append(wf)
-        
-        # Склеиваем по временной оси
-        concatenated = torch.cat(waveforms, dim=-1)  # dim=-1 = временная ось
-        
-        return {"waveform": concatenated, "sample_rate": target_sr}
+        finally:
+            # ГАРАНТИРОВАННОЕ удаление временного файла
+            if temp_ref_path and os.path.exists(temp_ref_path):
+                try:
+                    os.unlink(temp_ref_path)
+                except Exception as e:
+                    print(f"⚠️ Не удалось удалить временный файл: {e}")
 
 
 class QwenTTSBatchGenerate:
@@ -919,87 +619,315 @@ class QwenTTSBatchGenerate:
                     "default": "Привет!|Как дела?|Пока!",
                     "multiline": True
                 }),
-                "language": ("STRING", {"default": "Russian"}),
-                "temperature": ("FLOAT", {"default": 0.8, "min": 0.1, "max": 2.0}),
+                "language": (["Auto", "Russian", "English", "Chinese", "German", 
+                            "French", "Spanish", "Japanese", "Korean"], {"default": "Russian"}),
+                "temperature": ("FLOAT", {"default": 0.8, "min": 0.1, "max": 2.0, "step": 0.1}),
+                "top_p": ("FLOAT", {"default": 0.9, "min": 0.1, "max": 1.0, "step": 0.05}),
                 "separator": ("STRING", {"default": "|"}),
             },
             "optional": {
                 "output_prefix": ("STRING", {"default": "batch_"}),
-                "seed": ("INT", {"default": 0}),
-                "emotion_preset": (["neutral", "happy", "sad", "angry", "surprised", 
-                                  "energetic", "calm", "dramatic", "professional"], 
-                                 {"default": "neutral"}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                "speaker": ("STRING", {"default": "Vivian"}),
                 "instruct": ("STRING", {"default": "", "multiline": True}),
             }
         }
     
     RETURN_TYPES = ("AUDIO", "STRING", "STRING")
     RETURN_NAMES = ("audio", "info", "filenames")
-    OUTPUT_IS_LIST = (True, False, False)
     FUNCTION = "batch_generate"
     CATEGORY = "audio/tts"
+    OUTPUT_IS_LIST = (True, False, False)
     
-    def batch_generate(self, qwen_model, text_list, language, temperature, separator="|",
-                      output_prefix="batch_", seed=0, emotion_preset="neutral", instruct=""):
+    def batch_generate(self, qwen_model, text_list, language, temperature, top_p, separator="|",
+                      output_prefix="batch_", seed=0, speaker="Vivian", instruct=""):
         
-        torch.manual_seed(seed)
+        # Безопасная обработка seed
+        try:
+            seed = int(seed) & 0xFFFFFFFF
+        except (ValueError, TypeError):
+            seed = 0
+        
+        # Безопасная обработка separator
+        if not separator or not isinstance(separator, str):
+            separator = "|"
+        separator = separator[:10]  # Ограничиваем длину разделителя
+        
+        # Безопасная обработка text_list
+        if not isinstance(text_list, str):
+            text_list = str(text_list)
+        
+        # Разделяем текст с ограничением количества элементов
         texts = [t.strip() for t in text_list.split(separator) if t.strip()]
         
+        # Ограничиваем количество элементов в пакете
+        max_batch_size = 20
+        if len(texts) > max_batch_size:
+            print(f"⚠️ Пакет обрезан с {len(texts)} до {max_batch_size} элементов")
+            texts = texts[:max_batch_size]
+        
         print(f"🔄 Пакетная генерация: {len(texts)} текстов")
-        print(f"😊 Эмоция: {emotion_preset}")
-        
-        # Безопасная обработка output_prefix
-        safe_output_prefix = PathSanitizer.sanitize_filename(output_prefix)
-        
-        # Эмоции → instruct
-        emotion_to_instruct = {
-            "neutral": "",
-            "happy": "радостный и энергичный тон",
-            "sad": "грустный и медленный тон",
-            "angry": "сердитый и резкий тон",
-            "surprised": "удивлённый, с высокой интонацией",
-            "energetic": "быстрый и энергичный темп",
-            "calm": "спокойный и мягкий тон",
-            "dramatic": "театральный и выразительный тон",
-            "professional": "чёткий и деловой тон",
-        }
-        
-        if emotion_preset != "neutral" and not instruct:
-            instruct = emotion_to_instruct.get(emotion_preset, "")
         
         audio_outputs = []
         filenames = []
+        successful = 0
+        failed = 0
+        
+        # Безопасная обработка output_prefix
+        safe_prefix = _sanitize_filename(output_prefix, 30).replace('.wav', '')
         
         for i, text in enumerate(texts):
+            if not isinstance(text, str):
+                text = str(text)
+            
+            text = text.strip()[:2000]  # Дополнительное ограничение для пакетного режима
+            
             print(f"  {i+1}/{len(texts)}: {text[:40]}...")
             
             try:
-                node = QwenTTSGenerate()
-                audio_dict, _ = node.generate_speech(
-                    qwen_model=qwen_model,
-                    text=text,
-                    language=language,
-                    temperature=temperature,
-                    top_p=0.9,
-                    seed=seed + i,
-                    speaker="Vivian",
-                    instruct=instruct,
-                    emotion_preset=emotion_preset
-                )
-                audio_outputs.append(audio_dict)
-                filename = f"{safe_output_prefix}{i+1:03d}.wav"
+                # Используем уникальный seed для каждого элемента
+                item_seed = (seed + i * 7919) & 0xFFFFFFFF  # Простое число для разнообразия
+                torch.manual_seed(item_seed)
+                
+                # Определяем тип модели
+                model_type = qwen_model.metadata.get("model_type", "base")
+                
+                start_time = time.time()
+                
+                # Безопасные параметры
+                safe_temp = max(0.1, min(2.0, float(temperature)))
+                safe_top_p = max(0.1, min(1.0, float(top_p)))
+                
+                # Генерация в зависимости от типа модели
+                if model_type == "custom_voice":
+                    safe_speaker = re.sub(r'[^\w\s\-]', '', str(speaker).strip())[:50] if speaker else "Vivian"
+                    safe_instruct = str(instruct).strip()[:500] if instruct else ""
+                    
+                    wavs, sr = qwen_model.generate_custom_voice(
+                        text=text,
+                        language=language if language != "Auto" else None,
+                        speaker=safe_speaker,
+                        instruct=safe_instruct,
+                        temperature=safe_temp,
+                        top_p=safe_top_p,
+                        max_new_tokens=1024,
+                    )
+                elif model_type == "voice_design":
+                    safe_instruct = str(instruct).strip()[:500] if instruct else "естественный и чёткий голос"
+                    
+                    wavs, sr = qwen_model.generate_voice_design(
+                        text=text,
+                        language=language if language != "Auto" else None,
+                        instruct=safe_instruct,
+                        temperature=safe_temp,
+                        top_p=safe_top_p,
+                        max_new_tokens=1024,
+                    )
+                else:  # base модели
+                    safe_instruct = str(instruct).strip()[:500] if instruct else "нейтральный тон"
+                    
+                    wavs, sr = qwen_model.generate_voice_design(
+                        text=text,
+                        language=language if language != "Auto" else None,
+                        instruct=safe_instruct,
+                        temperature=safe_temp,
+                        top_p=safe_top_p,
+                        max_new_tokens=1024,
+                    )
+                
+                duration = time.time() - start_time
+                
+                # Обработка аудио
+                audio_data = wavs[0] if isinstance(wavs, list) else wavs
+                if torch.is_tensor(audio_data):
+                    audio_data = audio_data.detach().cpu().numpy()
+                
+                # Ограничение длины
+                max_samples = 5 * 60 * sr  # 5 минут для пакетного режима
+                if len(audio_data) > max_samples:
+                    audio_data = audio_data[:max_samples]
+                
+                audio_tensor = torch.from_numpy(audio_data).unsqueeze(0).unsqueeze(0)
+                
+                # Создаем имя файла
+                filename = f"{safe_prefix}_{i+1:03d}.wav"
                 filenames.append(filename)
                 
+                audio_outputs.append({
+                    "waveform": audio_tensor,
+                    "sample_rate": int(sr),
+                    "metadata": {
+                        "index": i,
+                        "text": text[:100],
+                        "duration": len(audio_data) / sr,
+                        "generation_time": duration,
+                    }
+                })
+                
+                successful += 1
+                print(f"    ✅ Успешно за {duration:.2f} сек")
+                
             except Exception as e:
-                print(f"  ❌ Ошибка в тексте {i+1}: {e}")
-                silence = {"waveform": torch.zeros((1, 1, 24000)), "sample_rate": 24000}
-                audio_outputs.append(silence)
-                filenames.append(f"error_{i+1}.wav")
+                print(f"    ❌ Ошибка: {str(e)[:100]}")
+                # Создаем тишину в случае ошибки
+                silence = torch.zeros((1, 1, 24000))
+                audio_outputs.append({
+                    "waveform": silence,
+                    "sample_rate": 24000,
+                    "metadata": {"error": str(e)[:100], "index": i}
+                })
+                filenames.append(f"error_{i+1:03d}.wav")
+                failed += 1
         
-        info = f"Сгенерировано {len(audio_outputs)} аудиофайлов, эмоция: {emotion_preset}"
+        # Формируем выходные данные
+        audio_list = [{"waveform": item["waveform"], "sample_rate": item["sample_rate"]} 
+                     for item in audio_outputs]
+        
+        info = {
+            "total": len(texts),
+            "successful": successful,
+            "failed": failed,
+            "batch_seed": seed,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        
         filenames_str = separator.join(filenames)
         
-        return (audio_outputs, info, filenames_str)
+        return (audio_list, json.dumps(info, indent=2), filenames_str)
+
+
+class QwenTTSEmotionMixer:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "audio_inputs": ("AUDIO",),
+                "weights": ("STRING", {"default": "1.0", "multiline": False}),
+                "normalize": (["yes", "no"], {"default": "yes"}),
+            }
+        }
+    
+    RETURN_TYPES = ("AUDIO",)
+    RETURN_NAMES = ("audio",)
+    FUNCTION = "mix_emotions"
+    CATEGORY = "audio/tts"
+    INPUT_IS_LIST = True
+    
+    def mix_emotions(self, audio_inputs, weights, normalize):
+        if not audio_inputs:
+            print("⚠️ Нет входных аудио данных")
+            silence = torch.zeros((1, 1, 24000))
+            return ({"waveform": silence, "sample_rate": 24000},)
+        
+        print(f"🎚️ Микширование {len(audio_inputs)} аудио дорожек...")
+        
+        try:
+            # Безопасная обработка весов
+            weight_str = weights[0] if isinstance(weights, list) and weights else "1.0"
+            weight_parts = weight_str.split(',')
+            
+            weight_list = []
+            for part in weight_parts:
+                try:
+                    weight = float(part.strip())
+                    weight_list.append(max(0.0, min(10.0, weight)))  # Ограничиваем диапазон
+                except (ValueError, TypeError):
+                    weight_list.append(1.0)
+            
+            # Если весов меньше чем аудио, дополняем
+            while len(weight_list) < len(audio_inputs):
+                weight_list.append(1.0)
+            
+            # Если весов больше, обрезаем
+            if len(weight_list) > len(audio_inputs):
+                weight_list = weight_list[:len(audio_inputs)]
+            
+            # Извлекаем и обрабатываем аудиоданные
+            waveforms = []
+            sample_rates = []
+            max_len = 0
+            
+            for i, audio in enumerate(audio_inputs):
+                if audio is None:
+                    continue
+                    
+                # Извлекаем waveform
+                if isinstance(audio, dict) and "waveform" in audio:
+                    wf = audio["waveform"]
+                    sr = audio.get("sample_rate", 24000)
+                elif torch.is_tensor(audio):
+                    wf = audio
+                    sr = 24000
+                else:
+                    print(f"⚠️ Неизвестный формат аудио #{i}")
+                    continue
+                
+                # Конвертируем в numpy
+                if torch.is_tensor(wf):
+                    wf_np = wf.detach().cpu().numpy().squeeze()
+                else:
+                    wf_np = np.array(wf).squeeze()
+                
+                # Проверяем данные
+                if wf_np.size == 0:
+                    print(f"⚠️ Пустые аудио данные #{i}")
+                    continue
+                
+                waveforms.append(wf_np)
+                sample_rates.append(sr)
+                max_len = max(max_len, len(wf_np))
+            
+            if not waveforms:
+                print("⚠️ Нет валидных аудио данных для микширования")
+                silence = torch.zeros((1, 1, 24000))
+                return ({"waveform": silence, "sample_rate": 24000},)
+            
+            # Нормализуем sample rates (используем первый валидный)
+            target_sr = sample_rates[0]
+            for i, sr in enumerate(sample_rates):
+                if sr != target_sr:
+                    print(f"⚠️ Разные sample rates, возможны артефакты: {sr} vs {target_sr}")
+            
+            # Приводим все к одной длине
+            padded_waveforms = []
+            for wf in waveforms:
+                if len(wf) < max_len:
+                    # Дополняем тишиной
+                    padded = np.zeros(max_len, dtype=wf.dtype)
+                    padded[:len(wf)] = wf
+                    padded_waveforms.append(padded)
+                else:
+                    padded_waveforms.append(wf[:max_len])
+            
+            # Нормализуем веса если нужно
+            if normalize[0].lower() == "yes" if isinstance(normalize, list) else str(normalize).lower() == "yes":
+                weight_sum = sum(weight_list)
+                if weight_sum > 0:
+                    weight_list = [w / weight_sum for w in weight_list]
+                else:
+                    weight_list = [1.0 / len(weight_list)] * len(weight_list)
+            
+            # Микшируем
+            mixed = np.zeros_like(padded_waveforms[0])
+            for wf, weight in zip(padded_waveforms, weight_list):
+                mixed += wf * weight
+            
+            # Нормализуем результат чтобы избежать клиппинга
+            max_val = np.max(np.abs(mixed))
+            if max_val > 1.0:
+                mixed = mixed / max_val
+            
+            # Конвертируем обратно в тензор
+            mixed_tensor = torch.from_numpy(mixed).unsqueeze(0).unsqueeze(0)
+            
+            print(f"✅ Смешано {len(waveforms)} аудио дорожек")
+            return ({"waveform": mixed_tensor, "sample_rate": target_sr},)
+            
+        except Exception as e:
+            print(f"❌ Ошибка микширования: {e}")
+            traceback.print_exc()
+            silence = torch.zeros((1, 1, 24000))
+            return ({"waveform": silence, "sample_rate": 24000},)
 
 
 class QwenTTSAudioSaver:
@@ -1014,7 +942,6 @@ class QwenTTSAudioSaver:
             "optional": {
                 "output_dir": ("STRING", {"default": "output/tts", "multiline": False}),
                 "metadata": ("STRING", {"default": "", "multiline": True}),
-                "clear_output_dir": (["no", "yes"], {"default": "no"}),
             }
         }
     
@@ -1023,284 +950,142 @@ class QwenTTSAudioSaver:
     FUNCTION = "save_audio"
     CATEGORY = "audio/tts"
     
-    def save_audio(self, audio, filename, sample_rate, output_dir="output/tts", 
-                   metadata="", clear_output_dir="no"):
+    def save_audio(self, audio, filename, sample_rate, output_dir="output/tts", metadata=""):
+        # Валидация sample_rate
+        try:
+            sample_rate = int(sample_rate)
+            sample_rate = max(8000, min(48000, sample_rate))
+        except (ValueError, TypeError):
+            sample_rate = 24000
         
-        # === БЕЗОПАСНАЯ ОБРАБОТКА output_dir ===
-        # 1. Санитаризируем output_dir
-        safe_output_dir = PathSanitizer.sanitize_path(output_dir)
-        if not safe_output_dir:
-            safe_output_dir = "output/tts"
+        # Безопасная обработка output_dir
+        if not output_dir or not isinstance(output_dir, str):
+            output_dir = "output/tts"
         
-        # 2. Получаем базовую директорию вывода из ComfyUI
-        base_output_dir = folder_paths.get_output_directory()
+        # Защита от path traversal
+        safe_output_dir = output_dir.strip()
         
-        # 3. Создаем полный путь и нормализуем его
+        # Удаляем все попытки уйти вверх по директории
+        safe_output_dir = re.sub(r'\.\./', '', safe_output_dir)
+        safe_output_dir = re.sub(r'\.\.\\', '', safe_output_dir)
+        
+        # Нормализуем путь
+        safe_output_dir = os.path.normpath(safe_output_dir)
+        
+        # Проверяем каждый компонент пути
+        parts = safe_output_dir.split(os.sep)
+        safe_parts = []
+        for part in parts:
+            if part and part not in ['.', '..']:
+                # Очищаем и ограничиваем длину
+                clean_part = re.sub(r'[^\w\s\.\-]', '_', part)
+                safe_parts.append(clean_part[:50])
+        
+        # Если после очистки путь пустой, используем дефолтный
+        if not safe_parts:
+            safe_parts = ["output", "tts"]
+        
+        safe_output_dir = os.sep.join(safe_parts)
+        
+        # Получаем базовую директорию вывода ComfyUI
+        try:
+            base_output_dir = folder_paths.get_output_directory()
+        except Exception:
+            base_output_dir = os.path.join(os.path.dirname(__file__), "output")
+        
+        # Создаем полный путь
         full_output_dir = os.path.join(base_output_dir, safe_output_dir)
+        
+        # Финальная проверка пути
         full_output_dir = os.path.normpath(full_output_dir)
+        if not os.path.normpath(full_output_dir).startswith(os.path.normpath(base_output_dir)):
+            print(f"⚠️ Недопустимый путь, используется default")
+            full_output_dir = os.path.join(base_output_dir, "output", "tts")
         
-        # 4. Проверяем, что путь остается внутри разрешенной директории
-        base_output_norm = os.path.normpath(base_output_dir)
-        if not full_output_dir.startswith(base_output_norm):
-            print(f"⚠️ Опасный путь output_dir: {output_dir}, используется стандартный")
-            safe_output_dir = "output/tts"
-            full_output_dir = os.path.join(base_output_dir, safe_output_dir)
-            full_output_dir = os.path.normpath(full_output_dir)
+        # Создаем директорию
+        try:
+            os.makedirs(full_output_dir, exist_ok=True)
+        except Exception as e:
+            print(f"⚠️ Не удалось создать директорию: {e}")
+            full_output_dir = base_output_dir
         
-        # === БЕЗОПАСНАЯ ОБРАБОТКА filename ===
-        # 1. Санитаризируем имя файла
-        safe_filename = PathSanitizer.sanitize_filename(filename)
+        # Безопасное имя файла
+        safe_filename = _sanitize_filename(filename)
         
-        # 2. Убеждаемся, что у файла безопасное расширение
-        safe_filename = PathSanitizer.ensure_safe_extension(safe_filename, ".wav")
-        
-        # 3. Формируем полный путь к файлу
+        # Финальная проверка пути
         filepath = os.path.join(full_output_dir, safe_filename)
         filepath = os.path.normpath(filepath)
         
-        # 4. Двойная проверка, что файл сохраняется в правильной директории
-        if not filepath.startswith(full_output_dir):
-            print(f"⚠️ Попытка сохранить файл за пределами директории: {filename}")
-            safe_filename = "output.wav"
-            filepath = os.path.join(full_output_dir, safe_filename)
+        # Проверяем, что файл остается внутри целевой директории
+        if not filepath.startswith(os.path.normpath(full_output_dir)):
+            raise ValueError(f"Недопустимое имя файла (path traversal): {filename}")
         
-        # === ОЧИСТКА ДИРЕКТОРИИ (если выбрано) ===
-        if clear_output_dir == "yes":
-            # Очищаем только если директория существует и внутри разрешенной зоны
-            if os.path.exists(full_output_dir) and full_output_dir.startswith(base_output_norm):
-                try:
-                    print(f"🧹 Очистка директории: {full_output_dir}")
-                    for item in os.listdir(full_output_dir):
-                        item_path = os.path.join(full_output_dir, item)
-                        try:
-                            if os.path.isfile(item_path) or os.path.islink(item_path):
-                                os.unlink(item_path)
-                            elif os.path.isdir(item_path):
-                                # Проверяем, что это не симлинк на внешнюю директорию
-                                if not os.path.islink(item_path):
-                                    shutil.rmtree(item_path)
-                        except Exception as e:
-                            print(f"⚠️ Не удалось удалить {item_path}: {e}")
-                except Exception as e:
-                    print(f"⚠️ Ошибка при очистке директории: {e}")
-            else:
-                print(f"⚠️ Директория для очистки не найдена или небезопасна: {full_output_dir}")
-        
-        # === СОЗДАНИЕ ДИРЕКТОРИИ ===
-        try:
-            os.makedirs(full_output_dir, exist_ok=True)
-            print(f"📁 Директория создана/подготовлена: {full_output_dir}")
-        except Exception as e:
-            print(f"❌ Не удалось создать директорию {full_output_dir}: {e}")
-            # Создаем стандартную директорию в случае ошибки
-            full_output_dir = os.path.join(base_output_dir, "output")
-            os.makedirs(full_output_dir, exist_ok=True)
-            safe_filename = "output.wav"
-            filepath = os.path.join(full_output_dir, safe_filename)
-        
-        # === СОХРАНЕНИЕ АУДИО ===
+        # Безопасная обработка аудио
         try:
             if isinstance(audio, dict) and "waveform" in audio:
-                audio_np = audio["waveform"].cpu().numpy().squeeze()
-                actual_sample_rate = audio.get("sample_rate", sample_rate)
+                audio_np = audio["waveform"].detach().cpu().numpy().squeeze()
+            elif torch.is_tensor(audio):
+                audio_np = audio.detach().cpu().numpy().squeeze()
             else:
-                audio_np = audio.cpu().numpy().squeeze() if isinstance(audio, torch.Tensor) else np.array(audio)
-                actual_sample_rate = sample_rate
-            
-            # Используем актуальную частоту дискретизации из аудио или переданную
-            save_sample_rate = actual_sample_rate if actual_sample_rate else sample_rate
-            
-            # Нормализуем аудио данные
-            if audio_np.dtype != np.float32:
-                if audio_np.dtype in [np.int16, np.int32]:
-                    audio_np = audio_np.astype(np.float32) / 32768.0
-                else:
-                    audio_np = audio_np.astype(np.float32)
-            
-            # Обрезаем значения до безопасного диапазона
-            audio_np = np.clip(audio_np, -1.0, 1.0)
-            
-            # Сохраняем файл
-            sf.write(filepath, audio_np, save_sample_rate, subtype='FLOAT')
-            print(f"💾 Аудио сохранено: {filepath}")
-            print(f"   Частота дискретизации: {save_sample_rate} Hz")
-            print(f"   Длина: {len(audio_np)/save_sample_rate:.2f} сек")
-            
+                audio_np = np.array(audio).squeeze()
         except Exception as e:
-            print(f"❌ Ошибка при сохранении аудио: {e}")
-            traceback.print_exc()
-            # Возвращаем путь к файлу даже при ошибке
-            return (filepath,)
+            print(f"❌ Ошибка обработки аудио: {e}")
+            audio_np = np.zeros(sample_rate)  # 1 секунда тишины
         
-        # === СОХРАНЕНИЕ МЕТАДАННЫХ ===
-        if metadata and isinstance(metadata, str) and metadata.strip():
-            metadata_file = os.path.splitext(filepath)[0] + '.json'
+        # Проверяем размер аудио
+        max_duration = 30 * 60  # 30 минут максимум
+        max_samples = max_duration * sample_rate
+        
+        if len(audio_np) > max_samples:
+            audio_np = audio_np[:max_samples]
+            print(f"⚠️ Аудио обрезано до {max_duration} минут")
+        
+        # Сохраняем файл
+        try:
+            sf.write(filepath, audio_np, sample_rate)
+            print(f"💾 Аудио сохранено: {filepath}")
+        except Exception as e:
+            print(f"❌ Ошибка сохранения аудио: {e}")
+            # Пробуем альтернативный путь
+            alt_filename = f"output_{int(time.time())}.wav"
+            alt_filepath = os.path.join(base_output_dir, alt_filename)
             try:
-                # Пытаемся разобрать JSON
-                if metadata.strip().startswith('{'):
-                    meta_dict = json.loads(metadata)
-                else:
-                    meta_dict = {"metadata": metadata}
-                
-                # Добавляем системную информацию
-                meta_dict.update({
-                    "save_time": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "output_dir": safe_output_dir,
-                    "filename": safe_filename,
-                    "cleared_before_save": clear_output_dir == "yes",
-                    "sample_rate": save_sample_rate,
-                    "duration_sec": len(audio_np)/save_sample_rate if 'audio_np' in locals() else 0,
-                })
-                
-                # Сохраняем метаданные
-                with open(metadata_file, 'w', encoding='utf-8') as f:
-                    json.dump(meta_dict, f, indent=2, ensure_ascii=False)
-                
-                print(f"📋 Метаданные сохранены: {metadata_file}")
-                
-            except json.JSONDecodeError:
-                # Если это не JSON, сохраняем как текст
+                sf.write(alt_filepath, audio_np, sample_rate)
+                filepath = alt_filepath
+                print(f"💾 Аудио сохранено в альтернативный путь: {filepath}")
+            except Exception as e2:
+                print(f"❌ Критическая ошибка сохранения: {e2}")
+                raise
+        
+        # Безопасная обработка метаданных
+        if metadata and isinstance(metadata, str) and metadata.strip():
+            safe_metadata = _safe_json_loads(metadata)
+            
+            if safe_metadata:
                 try:
+                    metadata_file = os.path.splitext(filepath)[0] + '.json'
+                    
+                    # Добавляем системную информацию
+                    safe_metadata.update({
+                        "save_time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "filename": safe_filename,
+                        "sample_rate": sample_rate,
+                        "duration": len(audio_np) / sample_rate if sample_rate > 0 else 0,
+                        "file_size": os.path.getsize(filepath) if os.path.exists(filepath) else 0,
+                        "security": {
+                            "filename_sanitized": True,
+                            "path_validated": True,
+                        }
+                    })
+                    
                     with open(metadata_file, 'w', encoding='utf-8') as f:
-                        f.write(f"Metadata saved at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                        f.write("=" * 50 + "\n")
-                        f.write(metadata)
-                    print(f"📝 Метаданные сохранены как текст: {metadata_file}")
+                        json.dump(safe_metadata, f, indent=2, ensure_ascii=False)
+                    
+                    print(f"📝 Метаданные сохранены: {metadata_file}")
                 except Exception as e:
                     print(f"⚠️ Не удалось сохранить метаданные: {e}")
-            except Exception as e:
-                print(f"⚠️ Ошибка при сохранении метаданных: {e}")
         
         return (filepath,)
-
-
-class QwenTTSEmotionMixer:
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "audio_tensors": ("AUDIO",),
-                "weights": ("STRING", {"default": "1.0,0.5,0.3", "multiline": False}),
-                "normalize": (["yes", "no"], {"default": "yes"}),
-            }
-        }
-    
-    INPUT_IS_LIST = True
-    RETURN_TYPES = ("AUDIO",)
-    FUNCTION = "mix_emotions"
-    CATEGORY = "audio/tts"
-    
-    def mix_emotions(self, audio_tensors, weights, normalize):
-        print("🎚️ Микширование эмоциональных вариантов...")
-        
-        try:
-            # Безопасная обработка весов
-            if weights and isinstance(weights, list) and len(weights) > 0:
-                weight_str = str(weights[0])
-                # Разрешаем только цифры, точки и запятые
-                safe_weight_str = re.sub(r'[^0-9.,]', '', weight_str)
-                weight_list = [float(w.strip()) for w in safe_weight_str.split(',') if w.strip()]
-            else:
-                weight_list = []
-        except Exception as e:
-            print(f"⚠️ Ошибка при обработке весов: {e}")
-            weight_list = [1.0] * len(audio_tensors)
-        
-        # Если весов меньше чем аудио, дополняем
-        if len(weight_list) < len(audio_tensors):
-            weight_list.extend([1.0] * (len(audio_tensors) - len(weight_list)))
-        
-        waveforms = []
-        max_len = 0
-        for a in audio_tensors:
-            if isinstance(a, dict) and "waveform" in a:
-                wf = a["waveform"].cpu().numpy().squeeze()
-            else:
-                wf = a.cpu().numpy().squeeze() if isinstance(a, torch.Tensor) else np.array(a)
-            waveforms.append(wf)
-            max_len = max(max_len, len(wf))
-        
-        padded = []
-        for wf in waveforms:
-            if len(wf) < max_len:
-                wf = np.pad(wf, (0, max_len - len(wf)))
-            else:
-                wf = wf[:max_len]
-            padded.append(wf)
-        
-        if normalize == "yes" and weight_list:
-            weight_sum = sum(weight_list)
-            if weight_sum > 0:
-                weight_list = [w / weight_sum for w in weight_list]
-        
-        mixed = np.zeros_like(padded[0])
-        for wf, w in zip(padded, weight_list):
-            mixed += wf * w
-        
-        # Нормализуем результат
-        max_val = np.max(np.abs(mixed))
-        if max_val > 1.0:
-            mixed = mixed / max_val
-        
-        mixed_tensor = torch.from_numpy(mixed).unsqueeze(0).unsqueeze(0)
-        sample_rate = audio_tensors[0].get("sample_rate", 24000) if isinstance(audio_tensors[0], dict) else 24000
-        
-        print(f"✅ Смешано {len(audio_tensors)} аудио с весами {weight_list}")
-        return ({"waveform": mixed_tensor, "sample_rate": sample_rate},)
-
-
-class EmotionParametersPreview:
-    """Нода для предпросмотра эмоциональных параметров"""
-    
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "emotion_preset": (["neutral", "happy", "sad", "angry", "surprised", 
-                                  "energetic", "calm", "dramatic", "professional"], 
-                                 {"default": "neutral"}),
-            },
-            "optional": {
-                "tempo": ("FLOAT", {"default": 1.0, "min": 0.5, "max": 2.0, "step": 0.05}),
-                "pitch": ("FLOAT", {"default": 0.0, "min": -0.5, "max": 0.5, "step": 0.05}),
-                "energy": ("FLOAT", {"default": 0.0, "min": -0.5, "max": 0.5, "step": 0.05}),
-                "brightness": ("FLOAT", {"default": 0.0, "min": -0.5, "max": 0.5, "step": 0.05}),
-                "warmth": ("FLOAT", {"default": 0.0, "min": -0.5, "max": 0.5, "step": 0.05}),
-                "articulation": ("FLOAT", {"default": 0.0, "min": -0.5, "max": 0.5, "step": 0.05}),
-            }
-        }
-    
-    RETURN_TYPES = ("DICT", "STRING")
-    RETURN_NAMES = ("emotion_params", "instruct")
-    FUNCTION = "preview_params"
-    CATEGORY = "audio/tts/emotion"
-    
-    def preview_params(self, emotion_preset="neutral", tempo=1.0, pitch=0.0, 
-                      energy=0.0, brightness=0.0, warmth=0.0, articulation=0.0):
-        
-        emotion_control = EmotionControlParameters()
-        
-        # Применяем пресет
-        emotion_control.apply_preset(emotion_preset)
-        
-        # Перезаписываем индивидуальными параметрами
-        emotion_control.params.update({
-            "tempo": tempo,
-            "pitch": pitch,
-            "energy": energy,
-            "brightness": brightness,
-            "warmth": warmth,
-            "articulation": articulation,
-        })
-        
-        # Генерируем инструкцию
-        instruct = emotion_control.to_instruct_string()
-        
-        print(f"🎭 Пресет: {emotion_preset}")
-        print(f"📊 Параметры: {emotion_control.params}")
-        print(f"📋 Инструкция: {instruct}")
-        
-        return (emotion_control.to_dict(), instruct)
 
 
 # === РЕГИСТРАЦИЯ НОД ===
@@ -1311,10 +1096,8 @@ NODE_CLASS_MAPPINGS = {
     "QwenTTSBatchGenerate": QwenTTSBatchGenerate,
     "QwenTTSAudioSaver": QwenTTSAudioSaver,
     "QwenTTSEmotionMixer": QwenTTSEmotionMixer,
-    "EmotionParametersPreview": EmotionParametersPreview,
 }
 
-# Добавляем префикс "DVA" ко всем отображаемым именам
 NODE_DISPLAY_NAME_MAPPINGS = {
     "QwenTTSModelLoader": "DVA 🤖 Qwen TTS Loader",
     "QwenTTSGenerate": "DVA 🎤 Qwen TTS Generate",
@@ -1322,5 +1105,4 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "QwenTTSBatchGenerate": "DVA 📚 Qwen TTS Batch Generate",
     "QwenTTSAudioSaver": "DVA 💾 Qwen TTS Audio Saver",
     "QwenTTSEmotionMixer": "DVA 🔀 Qwen TTS Emotion Mixer",
-    "EmotionParametersPreview": "DVA 🎭 Emotion Parameters",
 }
