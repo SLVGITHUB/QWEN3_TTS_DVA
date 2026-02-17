@@ -129,6 +129,9 @@ pip install qwen-tts soundfile openai-whisper faster_whisper
 - Voice-overs of content with a unique voice
 - Remaking of historical speeches
 
+**Attention!!! Reference audio must be in the following format: mono, 44.1kHz, PCM, 16bit**
+
+
 ---
 
 ### 📚 Qwen TTS Batch Generate
@@ -289,6 +292,7 @@ Welcome:
 ⭐ If you like this project, put a star on GitHub!
 
 </div>
+
 
 
 
